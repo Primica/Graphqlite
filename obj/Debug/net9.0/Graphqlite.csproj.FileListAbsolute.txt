@@ -1,0 +1,14 @@
+/Users/arthur/Developer/Graphqlite/bin/Debug/net9.0/Graphqlite
+/Users/arthur/Developer/Graphqlite/bin/Debug/net9.0/Graphqlite.deps.json
+/Users/arthur/Developer/Graphqlite/bin/Debug/net9.0/Graphqlite.runtimeconfig.json
+/Users/arthur/Developer/Graphqlite/bin/Debug/net9.0/Graphqlite.dll
+/Users/arthur/Developer/Graphqlite/bin/Debug/net9.0/Graphqlite.pdb
+/Users/arthur/Developer/Graphqlite/obj/Debug/net9.0/Graphqlite.GeneratedMSBuildEditorConfig.editorconfig
+/Users/arthur/Developer/Graphqlite/obj/Debug/net9.0/Graphqlite.AssemblyInfoInputs.cache
+/Users/arthur/Developer/Graphqlite/obj/Debug/net9.0/Graphqlite.AssemblyInfo.cs
+/Users/arthur/Developer/Graphqlite/obj/Debug/net9.0/Graphqlite.csproj.CoreCompileInputs.cache
+/Users/arthur/Developer/Graphqlite/obj/Debug/net9.0/Graphqlite.dll
+/Users/arthur/Developer/Graphqlite/obj/Debug/net9.0/refint/Graphqlite.dll
+/Users/arthur/Developer/Graphqlite/obj/Debug/net9.0/Graphqlite.pdb
+/Users/arthur/Developer/Graphqlite/obj/Debug/net9.0/Graphqlite.genruntimeconfig.cache
+/Users/arthur/Developer/Graphqlite/obj/Debug/net9.0/ref/Graphqlite.dll
