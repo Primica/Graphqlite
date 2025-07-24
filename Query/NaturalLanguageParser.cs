@@ -454,6 +454,9 @@ public class NaturalLanguageParser
         // CORRECTION FINALE : Détecter si la requête contient des OR
         var hasOrInQuery = parts.Any(p => p.LogicalOperator == LogicalOperator.Or);
         
+        // Compteur pour générer des clés uniques pour les conditions OR
+        var orConditionCounter = 0;
+        
         foreach (var part in parts)
         {
             // Pattern étendu pour supporter l'opérateur 'contains' avec valeurs entre guillemets
@@ -478,7 +481,7 @@ public class NaturalLanguageParser
                     _ => "eq"
                 };
                 
-                // CORRECTION MAJEURE : Traiter correctement TOUTES les conditions OR
+                // CORRECTION MAJEURE : Traiter correctement TOUTES les conditions OR avec clés uniques
                 string conditionKey;
                 if (hasOrInQuery)
                 {
@@ -491,9 +494,10 @@ public class NaturalLanguageParser
                     }
                     else
                     {
-                        // Toutes les conditions qui ne sont pas explicitement AND deviennent OR
-                        // Cela inclut la première condition (LogicalOperator.None) et les conditions OR explicites
-                        conditionKey = $"Or_{property}_{normalizedOperator}";
+                        // CORRECTION : Générer des clés uniques pour chaque condition OR
+                        // pour éviter l'écrasement dans le dictionnaire
+                        conditionKey = $"Or_{property}_{normalizedOperator}_{orConditionCounter}";
+                        orConditionCounter++;
                     }
                 }
                 else

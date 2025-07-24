@@ -591,7 +591,7 @@ public class GraphQLiteEngine : IDisposable
     /// </summary>
     private bool EvaluateCondition(Node node, string conditionKey, object expectedValue)
     {
-        // Parser la clé de condition
+        // Parser la clé de condition avec support des suffixes numériques pour les conditions OR
         var keyParts = conditionKey.Split('_');
         
         string property;
@@ -608,6 +608,14 @@ public class GraphQLiteEngine : IDisposable
             // Format: And_property_operator ou Or_property_operator
             property = keyParts[1];
             @operator = keyParts[2];
+        }
+        else if (keyParts.Length == 4)
+        {
+            // CORRECTION : Format avec suffixe numérique: Or_property_operator_N
+            // Exemple: Or_skills_contains_0, Or_skills_contains_1
+            property = keyParts[1];
+            @operator = keyParts[2];
+            // Le keyParts[3] est le suffixe numérique, on l'ignore
         }
         else
         {
