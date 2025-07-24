@@ -67,6 +67,7 @@ public class GraphQLiteEngine : IDisposable
             QueryType.UpdateNode => UpdateNodeAsync(query),
             QueryType.DeleteNode => DeleteNodeAsync(query),
             QueryType.Count => CountNodesAsync(query),
+            QueryType.Aggregate => ExecuteAggregateAsync(query),
             QueryType.ShowSchema => ShowSchemaAsync(),
             _ => throw new NotSupportedException($"Type de requête non supporté : {query.Type}")
         };
@@ -760,6 +761,135 @@ public class GraphQLiteEngine : IDisposable
     public void Dispose()
     {
         _storage.SaveAsync().Wait();
+    }
+
+    private Task<QueryResult> ExecuteAggregateAsync(ParsedQuery query)
+    {
+        if (query.AggregateFunction == null || string.IsNullOrEmpty(query.AggregateProperty))
+        {
+            return Task.FromResult(new QueryResult
+            {
+                Success = false,
+                Error = "Fonction d'agrégation ou propriété manquante"
+            });
+        }
+
+        var nodes = _storage.GetNodesByLabel(query.NodeLabel!);
+
+        // Appliquer les conditions WHERE si présentes
+        if (query.Conditions.Any())
+        {
+            nodes = FilterNodesByConditions(nodes, query.Conditions);
+        }
+
+        // Extraire les valeurs numériques de la propriété spécifiée
+        var numericValues = new List<double>();
+        foreach (var node in nodes)
+        {
+            if (node.Properties.TryGetValue(query.AggregateProperty, out var value))
+            {
+                if (TryConvertToDouble(value, out double numericValue))
+                {
+                    numericValues.Add(numericValue);
+                }
+            }
+        }
+
+        if (!numericValues.Any())
+        {
+            return Task.FromResult(new QueryResult
+            {
+                Success = false,
+                Error = $"Aucune valeur numérique trouvée pour la propriété '{query.AggregateProperty}' dans les nœuds de type '{query.NodeLabel}'"
+            });
+        }
+
+        // Calculer l'agrégation selon la fonction demandée
+        object result = query.AggregateFunction switch
+        {
+            AggregateFunction.Sum => numericValues.Sum(),
+            AggregateFunction.Avg => numericValues.Average(),
+            AggregateFunction.Min => numericValues.Min(),
+            AggregateFunction.Max => numericValues.Max(),
+            AggregateFunction.Count => numericValues.Count,
+            _ => throw new NotSupportedException($"Fonction d'agrégation non supportée : {query.AggregateFunction}")
+        };
+
+        var functionName = query.AggregateFunction.ToString().ToLowerInvariant();
+        var conditionMessage = query.Conditions.Any() ? " (avec conditions)" : "";
+
+        return Task.FromResult(new QueryResult
+        {
+            Success = true,
+            Message = $"{functionName.ToUpperInvariant()}({query.AggregateProperty}) sur {numericValues.Count} nœud(s) de type '{query.NodeLabel}'{conditionMessage} = {result}",
+            Data = new
+            {
+                Function = functionName,
+                Property = query.AggregateProperty,
+                Label = query.NodeLabel,
+                Count = numericValues.Count,
+                Result = result,
+                Values = numericValues.Take(10).ToList() // Afficher les 10 premières valeurs pour debug
+            }
+        });
+    }
+
+    /// <summary>
+    /// Tente de convertir une valeur en double pour les calculs d'agrégation
+    /// </summary>
+    private bool TryConvertToDouble(object value, out double result)
+    {
+        result = 0;
+
+        if (value == null) return false;
+
+        // Types numériques directs
+        if (value is double d)
+        {
+            result = d;
+            return true;
+        }
+        
+        if (value is float f)
+        {
+            result = f;
+            return true;
+        }
+        
+        if (value is int i)
+        {
+            result = i;
+            return true;
+        }
+        
+        if (value is long l)
+        {
+            result = l;
+            return true;
+        }
+        
+        if (value is decimal dec)
+        {
+            result = (double)dec;
+            return true;
+        }
+
+        // Tentative de conversion depuis une chaîne
+        if (value is string str)
+        {
+            return double.TryParse(str, out result);
+        }
+
+        // Tentative de conversion générique
+        try
+        {
+            result = Convert.ToDouble(value);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }
 

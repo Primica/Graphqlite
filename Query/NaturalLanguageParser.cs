@@ -30,7 +30,11 @@ public class NaturalLanguageParser
         { "path", QueryType.FindPath },
         { "show", QueryType.ShowSchema },
         { "describe", QueryType.ShowSchema },
-        { "schema", QueryType.ShowSchema }
+        { "schema", QueryType.ShowSchema },
+        { "sum", QueryType.Aggregate },
+        { "avg", QueryType.Aggregate },
+        { "min", QueryType.Aggregate },
+        { "max", QueryType.Aggregate }
     };
 
     /// <summary>
@@ -72,6 +76,9 @@ public class NaturalLanguageParser
                 break;
             case QueryType.Count:
                 ParseCount(query, parsedQuery);
+                break;
+            case QueryType.Aggregate:
+                ParseAggregate(query, parsedQuery);
                 break;
             case QueryType.ShowSchema:
                 // Pour les commandes de schéma, aucune autre information n'est nécessaire
@@ -286,6 +293,46 @@ public class NaturalLanguageParser
         if (match.Groups[4].Success && int.TryParse(match.Groups[4].Value, out int offset))
         {
             parsedQuery.Offset = offset;
+        }
+    }
+
+    private void ParseAggregate(string query, ParsedQuery parsedQuery)
+    {
+        // Pattern: "sum|avg|min|max [label] property [property_name] [where conditions]"
+        var match = Regex.Match(query, @"(sum|avg|min|max)\s+(\w+)\s+property\s+(\w+)(?:\s+where\s+(.+))?$", RegexOptions.IgnoreCase);
+        
+        if (!match.Success)
+            throw new ArgumentException("Format d'agrégation invalide. Utiliser: sum|avg|min|max [label] property [property_name] [where conditions]");
+
+        // Déterminer la fonction d'agrégation
+        parsedQuery.AggregateFunction = match.Groups[1].Value.ToLowerInvariant() switch
+        {
+            "sum" => AggregateFunction.Sum,
+            "avg" => AggregateFunction.Avg,
+            "min" => AggregateFunction.Min,
+            "max" => AggregateFunction.Max,
+            _ => throw new ArgumentException($"Fonction d'agrégation non supportée : {match.Groups[1].Value}")
+        };
+
+        // Gérer le pluriel/singulier automatiquement pour le label
+        var label = match.Groups[2].Value;
+        if (label.EndsWith("ies") && label.Length > 3)
+        {
+            // companies → company, industries → industry
+            label = label[..^3] + "y";
+        }
+        else if (label.EndsWith("s") && label.Length > 1)
+        {
+            // persons → person, users → user
+            label = label[..^1];
+        }
+        
+        parsedQuery.NodeLabel = label;
+        parsedQuery.AggregateProperty = match.Groups[3].Value;
+
+        if (match.Groups[4].Success)
+        {
+            ParseConditions(match.Groups[4].Value, parsedQuery.Conditions);
         }
     }
 

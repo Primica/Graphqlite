@@ -15,6 +15,10 @@ public class ParsedQuery
     public int? Limit { get; set; }
     public int? Offset { get; set; }
     public int? MaxSteps { get; set; }
+    
+    // Propriétés pour les agrégations
+    public AggregateFunction? AggregateFunction { get; set; }
+    public string? AggregateProperty { get; set; }
 }
 
 /// <summary>
@@ -33,5 +37,18 @@ public enum QueryType
     DeleteNode,
     DeleteEdge,
     Count,
-    ShowSchema
+    ShowSchema,
+    Aggregate
+}
+
+/// <summary>
+/// Fonctions d'agrégation supportées
+/// </summary>
+public enum AggregateFunction
+{
+    Sum,
+    Avg,
+    Min,
+    Max,
+    Count
 }

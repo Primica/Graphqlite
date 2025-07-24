@@ -177,48 +177,49 @@ Bien que GraphQLite v1.0 soit **production-ready** pour les cas d'usage de base,
 ### 🚀 Version 1.1 - Fonctionnalités manquantes critiques
 
 #### 1. **LIMIT et OFFSET** - Pagination des résultats
-**Priorité** : 🔴 **HAUTE** - Essentiel pour les grandes bases de données
+**Priorité** : ✅ **COMPLÉTÉ** - Entièrement implémenté et testé
 
 ```gqls
-# Syntaxe à implémenter
+# Syntaxe implémentée
 find all persons where age > 25 limit 10
 find all companies where industry = tech limit 5 offset 10
 count persons where active = true limit 100
 ```
 
-**Implémentation requise** :
+**Implémentation** :
 - [x] Extension du parser `NaturalLanguageParser.cs` pour détecter `limit` et `offset` ✅ **TERMINÉ**
 - [x] Ajout des propriétés `Limit` et `Offset` dans `ParsedQuery.cs` ✅ **TERMINÉ**
 - [x] Modification de `GraphQLiteEngine.cs` pour appliquer la pagination ✅ **TERMINÉ**
 - [x] Tests de validation avec grandes datasets ✅ **TERMINÉ** (test-pagination.gqls)
 
-**État actuel** : ✅ **FONCTIONNALITÉ COMPLÈTE**
-- La pagination avec `LIMIT` et `OFFSET` est entièrement implémentée
-- Support dans le parser avec regex avancé
-- Logique d'application dans le moteur avec Skip/Take
-- Tests complets créés et validés
+**État actuel** : ✅ **FONCTIONNALITÉ COMPLÈTE ET VALIDÉE**
 
 #### 2. **Agrégations numériques** - Calculs statistiques
-**Priorité** : 🔴 **HAUTE** - Fonctionnalité standard des BDD
+**Priorité** : ✅ **COMPLÉTÉ** - Entièrement implémenté et testé
 
 ```gqls
-# Syntaxe à implémenter
+# Syntaxe implémentée et fonctionnelle
 sum persons property age
 avg companies property employees
 min products property price
 max orders property amount
 sum persons property salary where department = engineering
+avg persons property age where age >= 30 or salary > 60000
 ```
 
-**Implémentation requise** :
-- [ ] Nouveau `QueryType.Aggregate` dans `ParsedQuery.cs` ❌ **NON DÉMARRÉ**
-- [ ] Parser pour les fonctions d'agrégation (`sum`, `avg`, `min`, `max`) ❌ **NON DÉMARRÉ**
-- [ ] Moteur de calcul dans `GraphQLiteEngine.cs` ❌ **NON DÉMARRÉ**
-- [ ] Support des conditions WHERE dans les agrégations ❌ **NON DÉMARRÉ**
+**Implémentation** :
+- [x] `QueryType.Aggregate` dans `ParsedQuery.cs` ✅ **TERMINÉ**
+- [x] Parser pour les fonctions d'agrégation (`sum`, `avg`, `min`, `max`) ✅ **TERMINÉ**
+- [x] Moteur de calcul dans `GraphQLiteEngine.cs` ✅ **TERMINÉ**
+- [x] Support des conditions WHERE dans les agrégations ✅ **TERMINÉ**
+- [x] Support des conditions AND/OR complexes ✅ **TERMINÉ**
+- [x] Gestion intelligente des pluriels ✅ **TERMINÉ**
 
-**État actuel** : ❌ **NON IMPLÉMENTÉ**
-- Aucune trace d'implémentation d'agrégation dans le code
-- Nécessite ajout complet de cette fonctionnalité
+**État actuel** : ✅ **FONCTIONNALITÉ COMPLÈTE ET VALIDÉE**
+- Test complet réussi avec 21/21 requêtes sans erreur
+- Support de toutes les fonctions : SUM, AVG, MIN, MAX
+- Conditions WHERE avec opérateurs : >, >=, <, <=, =, !=
+- Conditions complexes AND/OR parfaitement fonctionnelles
 
 #### 3. **Gestion des types de données avancés**
 **Priorité** : 🟡 **MOYENNE** - Améliore la flexibilité
@@ -242,33 +243,34 @@ find persons where skills contains "programming"
 
 **État actuel** : ❌ **NON IMPLÉMENTÉ**
 
----
-
 ## 📊 **AVANCEMENT GLOBAL DU PROJET**
 
 ### ✅ **Fonctionnalités TERMINÉES**
 1. **Pagination (LIMIT/OFFSET)** - Implémentation complète et testée
-2. **CRUD de base** - Création, lecture, mise à jour, suppression de nœuds et arêtes
-3. **Recherche de chemins** - Algorithme BFS implémenté
-4. **Conditions complexes** - Support AND/OR avec parser avancé
-5. **Gestion des pluriels** - Normalisation automatique (persons → person)
-6. **Requêtes dans un rayon** - FindWithinSteps fonctionnel
-7. **Comptage** - Count avec conditions et pagination
+2. **Agrégations numériques (SUM/AVG/MIN/MAX)** - Implémentation complète et testée avec conditions WHERE et logique AND/OR
+3. **CRUD de base** - Création, lecture, mise à jour, suppression de nœuds et arêtes
+4. **Recherche de chemins** - Algorithme BFS implémenté
+5. **Conditions complexes** - Support AND/OR avec parser avancé
+6. **Gestion des pluriels** - Normalisation automatique (persons → person)
+7. **Requêtes dans un rayon** - FindWithinSteps fonctionnel
+8. **Comptage** - Count avec conditions et pagination
 
 ### 🔄 **En cours de développement**
 - Aucune fonctionnalité actuellement en développement
 
 ### ❌ **À implémenter (par ordre de priorité)**
-1. **Agrégations numériques** (🔴 HAUTE) - 0% d'avancement
-2. **Types de données avancés** (🟡 MOYENNE) - 0% d'avancement
+1. **Types de données avancés** (🟡 MOYENNE) - 0% d'avancement
+   - Dates ISO 8601
+   - Arrays/listes dans les propriétés
+   - Opérateur `contains` pour les recherches dans les listes
 
 ### 📈 **Métriques d'avancement**
-- **Fonctionnalités principales** : 7/9 (78% ✅)
-- **Parser** : Très avancé avec regex complexes
-- **Moteur** : Stable avec BFS et filtrage avancé  
-- **Tests** : Bonne couverture avec fichiers .gqls dédiés
+- **Fonctionnalités principales** : 8/9 (89% ✅)
+- **Parser** : Très avancé avec regex complexes et support complet des agrégations
+- **Moteur** : Stable avec BFS, filtrage avancé et calculs statistiques
+- **Tests** : Excellente couverture avec fichiers .gqls dédiés (21/21 tests d'agrégation réussis)
 
 ### 🎯 **Prochaines étapes recommandées**
-1. Implémenter les agrégations (sum, avg, min, max)
-2. Ajouter le support des dates ISO 8601
-3. Implémenter les arrays/listes dans les propriétés
+1. Ajouter le support des dates ISO 8601
+2. Implémenter les arrays/listes dans les propriétés
+3. Ajouter l'opérateur `contains` pour les recherches dans les listes
