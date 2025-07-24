@@ -12,3 +12,4 @@
 /Users/arthur/Developer/Graphqlite/obj/Debug/net9.0/Graphqlite.pdb
 /Users/arthur/Developer/Graphqlite/obj/Debug/net9.0/Graphqlite.genruntimeconfig.cache
 /Users/arthur/Developer/Graphqlite/obj/Debug/net9.0/ref/Graphqlite.dll
+/Users/arthur/Developer/Graphqlite/obj/Debug/net9.0/Graphqlite.sourcelink.json

@@ -123,7 +123,12 @@ public class GraphQLiteEngine : IDisposable
             nodes = FilterNodesByConditions(nodes, query.Conditions);
         }
 
-        // Appliquer la limite
+        // Appliquer la pagination (OFFSET puis LIMIT)
+        if (query.Offset.HasValue)
+        {
+            nodes = nodes.Skip(query.Offset.Value).ToList();
+        }
+
         if (query.Limit.HasValue)
         {
             nodes = nodes.Take(query.Limit.Value).ToList();
@@ -291,6 +296,17 @@ public class GraphQLiteEngine : IDisposable
         if (query.Conditions.Any())
         {
             nodes = FilterNodesByConditions(nodes, query.Conditions);
+        }
+
+        // Appliquer la pagination avant le comptage (utile pour compter une page spécifique)
+        if (query.Offset.HasValue)
+        {
+            nodes = nodes.Skip(query.Offset.Value).ToList();
+        }
+
+        if (query.Limit.HasValue)
+        {
+            nodes = nodes.Take(query.Limit.Value).ToList();
         }
 
         return Task.FromResult(new QueryResult

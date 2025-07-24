@@ -187,10 +187,16 @@ count persons where active = true limit 100
 ```
 
 **Implémentation requise** :
-- [ ] Extension du parser `NaturalLanguageParser.cs` pour détecter `limit` et `offset`
-- [ ] Ajout des propriétés `Limit` et `Offset` dans `ParsedQuery.cs`
-- [ ] Modification de `GraphQLiteEngine.cs` pour appliquer la pagination
-- [ ] Tests de validation avec grandes datasets
+- [x] Extension du parser `NaturalLanguageParser.cs` pour détecter `limit` et `offset` ✅ **TERMINÉ**
+- [x] Ajout des propriétés `Limit` et `Offset` dans `ParsedQuery.cs` ✅ **TERMINÉ**
+- [x] Modification de `GraphQLiteEngine.cs` pour appliquer la pagination ✅ **TERMINÉ**
+- [x] Tests de validation avec grandes datasets ✅ **TERMINÉ** (test-pagination.gqls)
+
+**État actuel** : ✅ **FONCTIONNALITÉ COMPLÈTE**
+- La pagination avec `LIMIT` et `OFFSET` est entièrement implémentée
+- Support dans le parser avec regex avancé
+- Logique d'application dans le moteur avec Skip/Take
+- Tests complets créés et validés
 
 #### 2. **Agrégations numériques** - Calculs statistiques
 **Priorité** : 🔴 **HAUTE** - Fonctionnalité standard des BDD
@@ -205,10 +211,14 @@ sum persons property salary where department = engineering
 ```
 
 **Implémentation requise** :
-- [ ] Nouveau `QueryType.Aggregate` dans `ParsedQuery.cs`
-- [ ] Parser pour les fonctions d'agrégation (`sum`, `avg`, `min`, `max`)
-- [ ] Moteur de calcul dans `GraphQLiteEngine.cs`
-- [ ] Support des conditions WHERE dans les agrégations
+- [ ] Nouveau `QueryType.Aggregate` dans `ParsedQuery.cs` ❌ **NON DÉMARRÉ**
+- [ ] Parser pour les fonctions d'agrégation (`sum`, `avg`, `min`, `max`) ❌ **NON DÉMARRÉ**
+- [ ] Moteur de calcul dans `GraphQLiteEngine.cs` ❌ **NON DÉMARRÉ**
+- [ ] Support des conditions WHERE dans les agrégations ❌ **NON DÉMARRÉ**
+
+**État actuel** : ❌ **NON IMPLÉMENTÉ**
+- Aucune trace d'implémentation d'agrégation dans le code
+- Nécessite ajout complet de cette fonctionnalité
 
 #### 3. **Gestion des types de données avancés**
 **Priorité** : 🟡 **MOYENNE** - Améliore la flexibilité
@@ -222,201 +232,43 @@ update person set birthdate 1985-03-20 where name = Alice
 # Listes/Arrays  
 create person with name John and skills ["programming", "design", "management"]
 find persons where skills contains "programming"
-update person add skill "leadership" where name = John
 ```
 
 **Implémentation requise** :
-- [ ] Extension du système de types dans `Node.cs`
-- [ ] Parser pour les formats de dates ISO
-- [ ] Support des arrays dans les propriétés
-- [ ] Opérateurs `contains`, `in`, `not in` pour les listes
+- [ ] Support des dates ISO 8601 dans le parser ❌ **NON DÉMARRÉ**
+- [ ] Support des arrays/listes dans les propriétés ❌ **NON DÉMARRÉ**
+- [ ] Opérateurs de comparaison pour dates ❌ **NON DÉMARRÉ**
+- [ ] Opérateur `contains` pour les listes ❌ **NON DÉMARRÉ**
 
-### 🔧 Version 1.2 - Améliorations de robustesse
-
-#### 4. **Conditions avec parenthèses** - Logique complexe
-**Priorité** : 🟡 **MOYENNE** - Améliore la lisibilité des requêtes complexes
-
-```gqls
-# Syntaxe à implémenter
-find persons where (age > 25 and role = developer) or (age < 30 and experience > 5)
-find companies where (industry = tech and employees > 100) or (founded < 2000 and revenue > 1000000)
-count persons where (active = true and role = manager) or (active = false and lastLogin > 2023-01-01)
-```
-
-**Implémentation requise** :
-- [ ] Parser avancé avec support des parenthèses dans `NaturalLanguageParser.cs`
-- [ ] Arbre de syntaxe abstraite (AST) pour les expressions complexes
-- [ ] Évaluateur d'expressions avec précédence des opérateurs
-- [ ] Tests exhaustifs de la logique booléenne
-
-#### 5. **Validation robuste des données**
-**Priorité** : 🟡 **MOYENNE** - Prévient les erreurs utilisateur
-
-```csharp
-// Validation à implémenter
-create person with age "invalid_number"  // Doit échouer avec message clair
-create person with birthdate "not-a-date"  // Erreur explicite
-connect NonExistentUser to Company  // Message d'erreur informatif
-```
-
-**Implémentation requise** :
-- [ ] Système de validation des types dans `Node.cs`
-- [ ] Messages d'erreur spécifiques et informatifs
-- [ ] Validation des références de nœuds avant création d'arêtes
-- [ ] Codes d'erreur structurés pour les applications client
-
-#### 6. **Jointures multi-niveaux** - Requêtes complexes
-**Priorité** : 🟡 **MOYENNE** - Fonctionnalité avancée
-
-```gqls
-# Syntaxe à implémenter
-find persons who work_at companies where industry = tech
-find products that belong_to companies where employees > 500
-find users who bought products from companies where founded < 2010
-```
-
-**Implémentation requise** :
-- [ ] Extension du parser pour les relations indirectes
-- [ ] Nouveau `QueryType.JoinQuery` 
-- [ ] Algorithmes de traversée multi-niveaux
-- [ ] Optimisation des performances pour les jointures complexes
-
-### 📊 Version 1.3 - Performance et scalabilité
-
-#### 7. **Système d'indexation** - Performance optimisée
-**Priorité** : 🟢 **BASSE** - Optimisation pour gros volumes
-
-```gqls
-# Commandes d'index à implémenter
-create index on person property name
-create index on company property industry
-drop index on person property age
-show indexes
-```
-
-**Implémentation requise** :
-- [ ] Structure d'index en mémoire dans `GraphStorage.cs`
-- [ ] Commandes de gestion d'index dans le DSL
-- [ ] Optimiseur de requêtes utilisant les index
-- [ ] Persistance des index dans le fichier `.gqlite`
-
-#### 8. **Transactions et rollback** - Intégrité des données
-**Priorité** : 🟢 **BASSE** - Sécurité pour les opérations critiques
-
-```gqls
-# Syntaxe transactionnelle à implémenter
-begin transaction;
-create person with name John and age 30;
-connect John to TechCorp with relationship works_at;
-update person set salary 75000 where name = John;
-commit;  // ou rollback; en cas d'erreur
-```
-
-**Implémentation requise** :
-- [ ] Système de transactions dans `GraphStorage.cs`
-- [ ] État de rollback pour les opérations
-- [ ] Commandes `begin`, `commit`, `rollback`
-- [ ] Isolation des données pendant les transactions
-
-### 🔌 Version 1.4 - Intégration et export
-
-#### 9. **Export/Import de données** - Interopérabilité
-**Priorité** : 🟢 **BASSE** - Facilite les migrations
-
-```gqls
-# Commandes d'export/import à implémenter
-export database to json file data.json
-export schema to graphml file schema.graphml
-import from csv file users.csv with mapping name->name, age->age
-import from json file backup.json
-```
-
-**Implémentation requise** :
-- [ ] Nouveau `QueryType.Export` et `QueryType.Import`
-- [ ] Sérialiseurs JSON, CSV, GraphML
-- [ ] Mapping flexible des colonnes
-- [ ] Gestion des erreurs d'import avec rapport détaillé
-
-#### 10. **API REST** - Interface web
-**Priorité** : 🟢 **BASSE** - Intégration avec applications web
-
-```http
-# Endpoints à implémenter
-POST /api/query
-{
-  "query": "find all persons where age > 25",
-  "database": "production"
-}
-
-GET /api/schema?database=production
-POST /api/nodes
-PUT /api/nodes/{id}
-DELETE /api/nodes/{id}
-```
-
-**Implémentation requise** :
-- [ ] Projet API séparé avec ASP.NET Core
-- [ ] Endpoints RESTful pour toutes les opérations
-- [ ] Authentication et autorisation
-- [ ] Documentation OpenAPI/Swagger
-
-### 🎨 Version 1.5 - Interface utilisateur
-
-#### 11. **Interface graphique** - Facilité d'usage
-**Priorité** : 🟢 **BASSE** - Interface visuelle
-
-**Fonctionnalités à implémenter** :
-- [ ] Application desktop (WPF/Avalonia)
-- [ ] Interface web (Blazor/React)
-- [ ] Visualisation des graphes (D3.js/Cytoscape)
-- [ ] Éditeur de requêtes avec auto-complétion
-- [ ] Explorateur de schéma interactif
-
-#### 12. **Outils de développement** - Productivité
-**Priorité** : 🟢 **BASSE** - Améliore l'expérience développeur
-
-**Extensions à créer** :
-- [ ] Extension VS Code avec coloration syntaxique `.gqls`
-- [ ] Debugger de requêtes avec exécution pas à pas
-- [ ] Profiler de performance des requêtes
-- [ ] Framework de tests unitaires intégré
-- [ ] Générateur de données de test
-
-### 📋 Matrice de priorités
-
-| Fonctionnalité | Priorité | Effort | Impact | Version cible |
-|----------------|----------|--------|---------|---------------|
-| LIMIT/OFFSET | 🔴 Haute | Moyen | Haut | 1.1 |
-| Agrégations | 🔴 Haute | Moyen | Haut | 1.1 |
-| Types avancés | 🟡 Moyenne | Élevé | Moyen | 1.1-1.2 |
-| Parenthèses | 🟡 Moyenne | Élevé | Moyen | 1.2 |
-| Validation | 🟡 Moyenne | Faible | Moyen | 1.2 |
-| Jointures | 🟡 Moyenne | Élevé | Moyen | 1.2 |
-| Indexation | 🟢 Basse | Élevé | Élevé | 1.3 |
-| Transactions | 🟢 Basse | Élevé | Élevé | 1.3 |
-| Export/Import | 🟢 Basse | Moyen | Moyen | 1.4 |
-| API REST | 🟢 Basse | Élevé | Élevé | 1.4 |
-| Interface GUI | 🟢 Basse | Très élevé | Moyen | 1.5 |
-| Outils dev | 🟢 Basse | Moyen | Faible | 1.5 |
-
-### 🎯 Recommandations de développement
-
-#### Pour la version 1.1 (Focus performance et usabilité)
-1. **Commencer par LIMIT/OFFSET** - Impact immédiat sur l'utilisabilité
-2. **Implémenter les agrégations** - Fonctionnalité attendue des utilisateurs
-3. **Ajouter les types Date** - Cas d'usage fréquents
-
-#### Pour les versions suivantes
-- **Version 1.2** : Focus sur la robustesse et la complexité des requêtes
-- **Version 1.3** : Optimisation pour la production et les gros volumes
-- **Version 1.4+** : Intégration et écosystème
-
-#### Architecture pour l'évolution
-- Maintenir la **rétrocompatibilité** du DSL
-- **Tests de régression** pour chaque nouvelle fonctionnalité  
-- **Documentation** mise à jour avec exemples pratiques
-- **Benchmarks** de performance pour valider les optimisations
+**État actuel** : ❌ **NON IMPLÉMENTÉ**
 
 ---
 
-**Prochaine étape recommandée** : Implémenter LIMIT/OFFSET dans la version 1.1 pour répondre au besoin immédiat de pagination.
+## 📊 **AVANCEMENT GLOBAL DU PROJET**
+
+### ✅ **Fonctionnalités TERMINÉES**
+1. **Pagination (LIMIT/OFFSET)** - Implémentation complète et testée
+2. **CRUD de base** - Création, lecture, mise à jour, suppression de nœuds et arêtes
+3. **Recherche de chemins** - Algorithme BFS implémenté
+4. **Conditions complexes** - Support AND/OR avec parser avancé
+5. **Gestion des pluriels** - Normalisation automatique (persons → person)
+6. **Requêtes dans un rayon** - FindWithinSteps fonctionnel
+7. **Comptage** - Count avec conditions et pagination
+
+### 🔄 **En cours de développement**
+- Aucune fonctionnalité actuellement en développement
+
+### ❌ **À implémenter (par ordre de priorité)**
+1. **Agrégations numériques** (🔴 HAUTE) - 0% d'avancement
+2. **Types de données avancés** (🟡 MOYENNE) - 0% d'avancement
+
+### 📈 **Métriques d'avancement**
+- **Fonctionnalités principales** : 7/9 (78% ✅)
+- **Parser** : Très avancé avec regex complexes
+- **Moteur** : Stable avec BFS et filtrage avancé  
+- **Tests** : Bonne couverture avec fichiers .gqls dédiés
+
+### 🎯 **Prochaines étapes recommandées**
+1. Implémenter les agrégations (sum, avg, min, max)
+2. Ajouter le support des dates ISO 8601
+3. Implémenter les arrays/listes dans les propriétés

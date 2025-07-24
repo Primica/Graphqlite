@@ -13,6 +13,7 @@ public class ParsedQuery
     public string? FromNode { get; set; }
     public string? ToNode { get; set; }
     public int? Limit { get; set; }
+    public int? Offset { get; set; }
     public int? MaxSteps { get; set; }
 }
 

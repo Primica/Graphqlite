@@ -138,8 +138,8 @@ public class NaturalLanguageParser
         // Normaliser la requête en supprimant les retours à la ligne excessifs
         var normalizedQuery = Regex.Replace(query, @"\s+", " ").Trim();
         
-        // Pattern: "find [all] [label] [where conditions] [limit N]"
-        var match = Regex.Match(normalizedQuery, @"find\s+(?:all\s+)?(\w+)(?:\s+where\s+(.+?))?(?:\s+limit\s+(\d+))?$");
+        // Pattern étendu: "find [all] [label] [where conditions] [limit N] [offset M]"
+        var match = Regex.Match(normalizedQuery, @"find\s+(?:all\s+)?(\w+)(?:\s+where\s+(.+?))?(?:\s+limit\s+(\d+))?(?:\s+offset\s+(\d+))?$");
         
         if (!match.Success)
             throw new ArgumentException("Format de recherche invalide");
@@ -169,6 +169,11 @@ public class NaturalLanguageParser
         if (match.Groups[3].Success && int.TryParse(match.Groups[3].Value, out int limit))
         {
             parsedQuery.Limit = limit;
+        }
+
+        if (match.Groups[4].Success && int.TryParse(match.Groups[4].Value, out int offset))
+        {
+            parsedQuery.Offset = offset;
         }
     }
 
@@ -245,8 +250,8 @@ public class NaturalLanguageParser
 
     private void ParseCount(string query, ParsedQuery parsedQuery)
     {
-        // Pattern: "count [label] [where conditions]"
-        var match = Regex.Match(query, @"count\s+(\w+)(?:\s+where\s+(.+))?$");
+        // Pattern étendu: "count [label] [where conditions] [limit N] [offset M]"
+        var match = Regex.Match(query, @"count\s+(\w+)(?:\s+where\s+(.+?))?(?:\s+limit\s+(\d+))?(?:\s+offset\s+(\d+))?$");
         
         if (!match.Success)
             throw new ArgumentException("Format de comptage invalide");
@@ -272,6 +277,16 @@ public class NaturalLanguageParser
         {
             ParseConditions(match.Groups[2].Value, parsedQuery.Conditions);
         }
+
+        if (match.Groups[3].Success && int.TryParse(match.Groups[3].Value, out int limit))
+        {
+            parsedQuery.Limit = limit;
+        }
+
+        if (match.Groups[4].Success && int.TryParse(match.Groups[4].Value, out int offset))
+        {
+            parsedQuery.Offset = offset;
+        }
     }
 
     private void ParseProperties(string propertiesText, Dictionary<string, object> properties)
@@ -293,6 +308,9 @@ public class NaturalLanguageParser
         // Ex: "age > 25 and name = John or status = active"
         var parts = SplitConditions(conditionsText);
         
+        // CORRECTION FINALE : Détecter si la requête contient des OR
+        var hasOrInQuery = parts.Any(p => p.LogicalOperator == LogicalOperator.Or);
+        
         foreach (var part in parts)
         {
             var match = Regex.Match(part.Condition, @"(\w+)\s*([><=!]+)\s*([^\s]+)");
@@ -303,7 +321,7 @@ public class NaturalLanguageParser
                 var @operator = match.Groups[2].Value;
                 var value = ParseValue(match.Groups[3].Value);
                 
-                // CORRECTION : Normaliser les opérateurs
+                // Normaliser les opérateurs
                 var normalizedOperator = @operator switch
                 {
                     ">" => "gt",
@@ -315,16 +333,23 @@ public class NaturalLanguageParser
                     _ => "eq"
                 };
                 
-                // CORRECTION MAJEURE : Si une requête contient OR, toutes les conditions sont OR sauf celles explicitement AND
-                var hasOrInQuery = parts.Any(p => p.LogicalOperator == LogicalOperator.Or);
-                
+                // CORRECTION MAJEURE : Traiter correctement TOUTES les conditions OR
                 string conditionKey;
                 if (hasOrInQuery)
                 {
-                    // Si la requête contient des OR, marquer comme OR sauf si explicitement AND
-                    conditionKey = part.LogicalOperator == LogicalOperator.And 
-                        ? $"And_{property}_{normalizedOperator}"
-                        : $"Or_{property}_{normalizedOperator}";
+                    // Dans une requête contenant OR, traiter chaque condition selon sa logique :
+                    // - Les conditions explicitement AND restent AND  
+                    // - Toutes les autres deviennent OR (y compris la première)
+                    if (part.LogicalOperator == LogicalOperator.And)
+                    {
+                        conditionKey = $"And_{property}_{normalizedOperator}";
+                    }
+                    else
+                    {
+                        // Toutes les conditions qui ne sont pas explicitement AND deviennent OR
+                        // Cela inclut la première condition (LogicalOperator.None) et les conditions OR explicites
+                        conditionKey = $"Or_{property}_{normalizedOperator}";
+                    }
                 }
                 else
                 {
