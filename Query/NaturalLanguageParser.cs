@@ -74,6 +74,9 @@ public class NaturalLanguageParser
             case QueryType.DeleteNode:
                 ParseDeleteNode(query, parsedQuery);
                 break;
+            case QueryType.DeleteEdge:
+                ParseDeleteEdge(query, parsedQuery);
+                break;
             case QueryType.Count:
                 ParseCount(query, parsedQuery);
                 break;
@@ -101,6 +104,12 @@ public class NaturalLanguageParser
                     return QueryType.FindPath;
                 if (keyword.Key == "find" && query.Contains("from") && query.Contains("over") && query.Contains("steps"))
                     return QueryType.FindWithinSteps;
+                
+                // Cas spéciaux pour la suppression
+                if ((keyword.Key == "delete" || keyword.Key == "remove") && query.Contains("edge"))
+                    return QueryType.DeleteEdge;
+                if ((keyword.Key == "delete" || keyword.Key == "remove") && query.Contains("relationship"))
+                    return QueryType.DeleteEdge;
                 
                 return keyword.Value;
             }
@@ -255,6 +264,23 @@ public class NaturalLanguageParser
         }
     }
 
+    private void ParseDeleteEdge(string query, ParsedQuery parsedQuery)
+    {
+        // Pattern: "delete edge from [node1] to [node2] where [conditions]"
+        var match = Regex.Match(query, @"(?:delete|remove)\s+edge\s+from\s+(\w+)\s+to\s+(\w+)(?:\s+where\s+(.+))?$");
+        
+        if (!match.Success)
+            throw new ArgumentException("Format de suppression d'arête invalide");
+
+        parsedQuery.FromNode = match.Groups[1].Value;
+        parsedQuery.ToNode = match.Groups[2].Value;
+
+        if (match.Groups[3].Success)
+        {
+            ParseConditions(match.Groups[3].Value, parsedQuery.Conditions);
+        }
+    }
+
     private void ParseCount(string query, ParsedQuery parsedQuery)
     {
         // Pattern étendu: "count [label] [where conditions] [limit N] [offset M]"
@@ -338,14 +364,77 @@ public class NaturalLanguageParser
 
     private void ParseProperties(string propertiesText, Dictionary<string, object> properties)
     {
-        // Pattern: "property1 value1 and property2 value2"
-        var matches = Regex.Matches(propertiesText, @"(\w+)\s+([^\s]+)(?:\s+and\s+|$)");
+        // Pattern amélioré pour supporter les valeurs complexes comme les arrays
+        // Gère : property1 value1 and property2 [val1, val2, val3] and property3 value3
+        var matches = Regex.Matches(propertiesText, @"(\w+)\s+([^\s](?:[^a]|a(?!nd\s))*?)(?:\s+and\s|$)", RegexOptions.IgnoreCase);
+        
+        // Si le pattern complexe échoue, essayer le pattern simple
+        if (matches.Count == 0)
+        {
+            matches = Regex.Matches(propertiesText, @"(\w+)\s+([^\s]+)(?:\s+and\s+|$)");
+        }
         
         foreach (Match match in matches)
         {
             var key = match.Groups[1].Value;
-            var value = ParseValue(match.Groups[2].Value);
+            var value = ParseValue(match.Groups[2].Value.Trim());
             properties[key] = value;
+        }
+        
+        // Si aucun match, essayer une approche alternative pour les cas complexes
+        if (properties.Count == 0)
+        {
+            ParsePropertiesAlternative(propertiesText, properties);
+        }
+    }
+
+    /// <summary>
+    /// Méthode alternative de parsing pour les propriétés complexes
+    /// </summary>
+    private void ParsePropertiesAlternative(string propertiesText, Dictionary<string, object> properties)
+    {
+        // Diviser par " and " tout en préservant les arrays
+        var parts = new List<string>();
+        var currentPart = "";
+        var bracketCount = 0;
+        var i = 0;
+        
+        while (i < propertiesText.Length)
+        {
+            var c = propertiesText[i];
+            
+            if (c == '[') bracketCount++;
+            else if (c == ']') bracketCount--;
+            
+            // Vérifier si on a " and " et qu'on n'est pas dans un array
+            if (bracketCount == 0 && i + 5 < propertiesText.Length && 
+                propertiesText.Substring(i, 5).Equals(" and ", StringComparison.OrdinalIgnoreCase))
+            {
+                parts.Add(currentPart.Trim());
+                currentPart = "";
+                i += 5;
+                continue;
+            }
+            
+            currentPart += c;
+            i++;
+        }
+        
+        if (!string.IsNullOrEmpty(currentPart.Trim()))
+        {
+            parts.Add(currentPart.Trim());
+        }
+        
+        // Parser chaque partie : "property value"
+        foreach (var part in parts)
+        {
+            var spaceIndex = part.IndexOf(' ');
+            if (spaceIndex > 0)
+            {
+                var key = part.Substring(0, spaceIndex);
+                var value = part.Substring(spaceIndex + 1).Trim();
+                properties[key] = ParseValue(value);
+            }
         }
     }
 
@@ -355,12 +444,20 @@ public class NaturalLanguageParser
         // Ex: "age > 25 and name = John or status = active"
         var parts = SplitConditions(conditionsText);
         
+        // DEBUG: Afficher toutes les parties détectées
+        Console.WriteLine($"DEBUG ParseConditions: '{conditionsText}' → {parts.Count} parties:");
+        foreach (var part in parts)
+        {
+            Console.WriteLine($"  - Partie: '{part.Condition}' avec opérateur: {part.LogicalOperator}");
+        }
+        
         // CORRECTION FINALE : Détecter si la requête contient des OR
         var hasOrInQuery = parts.Any(p => p.LogicalOperator == LogicalOperator.Or);
         
         foreach (var part in parts)
         {
-            var match = Regex.Match(part.Condition, @"(\w+)\s*([><=!]+)\s*([^\s]+)");
+            // Pattern étendu pour supporter l'opérateur 'contains' avec valeurs entre guillemets
+            var match = Regex.Match(part.Condition, @"(\w+)\s*(contains|[><=!]+)\s*([^\s]+|""[^""]*""|'[^']*')");
             
             if (match.Success)
             {
@@ -377,6 +474,7 @@ public class NaturalLanguageParser
                     "<=" => "le",
                     "=" => "eq",
                     "!=" => "ne",
+                    "contains" => "contains",
                     _ => "eq"
                 };
                 
@@ -406,6 +504,7 @@ public class NaturalLanguageParser
                         : $"{part.LogicalOperator}_{property}_{normalizedOperator}";
                 }
                 
+                Console.WriteLine($"DEBUG: Ajout condition '{conditionKey}' = {value}");
                 conditions[conditionKey] = value;
             }
         }
@@ -431,7 +530,7 @@ public class NaturalLanguageParser
                     LogicalOperator = currentOperator
                 });
             }
-            else // Opérateur logique
+            else // Opérateur logique - préparer pour la prochaine condition
             {
                 currentOperator = segments[i].ToLowerInvariant() switch
                 {
@@ -466,6 +565,28 @@ public class NaturalLanguageParser
 
     private object ParseValue(string value)
     {
+        // Tenter de parser comme array/liste
+        if (value.StartsWith("[") && value.EndsWith("]"))
+        {
+            var arrayContent = value.Substring(1, value.Length - 2).Trim();
+            if (string.IsNullOrEmpty(arrayContent))
+                return new List<object>();
+            
+            var elements = arrayContent.Split(',')
+                .Select(element => element.Trim().Trim('"', '\''))
+                .Cast<object>()
+                .ToList();
+            return elements;
+        }
+        
+        // Tenter de parser comme date ISO 8601 (YYYY-MM-DD ou YYYY-MM-DDTHH:mm:ss)
+        if (DateTime.TryParseExact(value, new[] { "yyyy-MM-dd", "yyyy-MM-ddTHH:mm:ss", "yyyy-MM-dd HH:mm:ss" }, 
+            System.Globalization.CultureInfo.InvariantCulture, 
+            System.Globalization.DateTimeStyles.None, out DateTime dateValue))
+        {
+            return dateValue;
+        }
+        
         // Tenter de parser comme nombre
         if (int.TryParse(value, out int intValue))
             return intValue;

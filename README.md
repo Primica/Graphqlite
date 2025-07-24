@@ -162,8 +162,14 @@ count companies where industry = tech and employees > 50
 
 ### Suppression
 ```gqls
+# Suppression de nœuds
 delete person where name = John
 delete company where employees < 10
+
+# Suppression d'arêtes (NOUVEAU !)
+delete edge from Alice to Bob
+delete edge from John to Company where type = works_at
+remove edge from Manager to Employee where type = supervises
 ```
 
 ### Visualisation du schéma

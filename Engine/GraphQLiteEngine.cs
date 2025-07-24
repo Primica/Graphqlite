@@ -66,6 +66,7 @@ public class GraphQLiteEngine : IDisposable
             QueryType.FindWithinSteps => FindWithinStepsAsync(query),
             QueryType.UpdateNode => UpdateNodeAsync(query),
             QueryType.DeleteNode => DeleteNodeAsync(query),
+            QueryType.DeleteEdge => DeleteEdgeAsync(query),
             QueryType.Count => CountNodesAsync(query),
             QueryType.Aggregate => ExecuteAggregateAsync(query),
             QueryType.ShowSchema => ShowSchemaAsync(),
@@ -287,6 +288,65 @@ public class GraphQLiteEngine : IDisposable
         {
             Success = true,
             Message = $"{deletedCount} nœud(s) supprimé(s)"
+        });
+    }
+
+    private Task<QueryResult> DeleteEdgeAsync(ParsedQuery query)
+    {
+        // Chercher les nœuds source et destination par nom
+        var fromNodes = _storage.GetAllNodes()
+            .Where(n => n.GetProperty<string>("name")?.Equals(query.FromNode, StringComparison.OrdinalIgnoreCase) == true)
+            .ToList();
+
+        var toNodes = _storage.GetAllNodes()
+            .Where(n => n.GetProperty<string>("name")?.Equals(query.ToNode, StringComparison.OrdinalIgnoreCase) == true)
+            .ToList();
+
+        if (!fromNodes.Any())
+        {
+            return Task.FromResult(new QueryResult 
+            { 
+                Success = false, 
+                Error = $"Nœud source '{query.FromNode}' introuvable" 
+            });
+        }
+
+        if (!toNodes.Any())
+        {
+            return Task.FromResult(new QueryResult 
+            { 
+                Success = false, 
+                Error = $"Nœud destination '{query.ToNode}' introuvable" 
+            });
+        }
+
+        var fromNodeId = fromNodes.First().Id;
+        var toNodeId = toNodes.First().Id;
+
+        // Trouver toutes les arêtes entre ces nœuds
+        var allEdges = _storage.GetAllEdges();
+        var edgesToDelete = allEdges.Where(e => 
+            (e.FromNodeId == fromNodeId && e.ToNodeId == toNodeId) ||
+            (e.FromNodeId == toNodeId && e.ToNodeId == fromNodeId) // Arêtes bidirectionnelles
+        ).ToList();
+
+        // Appliquer les conditions si présentes (par exemple pour filtrer par type de relation)
+        if (query.Conditions.Any())
+        {
+            edgesToDelete = FilterEdgesByConditions(edgesToDelete, query.Conditions);
+        }
+
+        int deletedCount = 0;
+        foreach (var edge in edgesToDelete)
+        {
+            if (_storage.RemoveEdge(edge.Id))
+                deletedCount++;
+        }
+
+        return Task.FromResult(new QueryResult
+        {
+            Success = true,
+            Message = $"{deletedCount} arête(s) supprimée(s) entre '{query.FromNode}' et '{query.ToNode}'"
         });
     }
 
@@ -574,8 +634,38 @@ public class GraphQLiteEngine : IDisposable
             "lt" => CompareValues(actualValue, expectedValue) < 0,
             "ge" => CompareValues(actualValue, expectedValue) >= 0,
             "le" => CompareValues(actualValue, expectedValue) <= 0,
+            "contains" => EvaluateContainsOperator(actualValue, expectedValue),
             _ => false
         };
+    }
+
+    /// <summary>
+    /// Évalue l'opérateur 'contains' pour les listes et chaînes
+    /// </summary>
+    private bool EvaluateContainsOperator(object actualValue, object expectedValue)
+    {
+        // Si la valeur actuelle est une liste/array
+        if (actualValue is List<object> list)
+        {
+            // Recherche dans la liste avec comparaison insensible à la casse pour les chaînes
+            return list.Any(item => 
+            {
+                if (item is string itemStr && expectedValue is string expectedStr)
+                {
+                    return itemStr.Equals(expectedStr, StringComparison.OrdinalIgnoreCase);
+                }
+                return Equals(item, expectedValue);
+            });
+        }
+        
+        // Si la valeur actuelle est une chaîne, vérifier si elle contient la valeur attendue
+        if (actualValue is string actualStr && expectedValue is string expectedStr)
+        {
+            return actualStr.Contains(expectedStr, StringComparison.OrdinalIgnoreCase);
+        }
+        
+        // Pour les autres types, retourner false
+        return false;
     }
 
     /// <summary>
@@ -592,6 +682,12 @@ public class GraphQLiteEngine : IDisposable
             return actualStr.Equals(expectedStr, StringComparison.OrdinalIgnoreCase);
         }
 
+        // Comparaison spéciale pour les dates
+        if (actual is DateTime actualDate && expected is DateTime expectedDate)
+        {
+            return actualDate.Date == expectedDate.Date; // Comparaison par date seulement
+        }
+
         // Comparaison standard pour les autres types
         return Equals(actual, expected);
     }
@@ -601,6 +697,12 @@ public class GraphQLiteEngine : IDisposable
         if (actual == null && expected == null) return 0;
         if (actual == null) return -1;
         if (expected == null) return 1;
+
+        // Comparaison spéciale pour les dates
+        if (actual is DateTime actualDate && expected is DateTime expectedDate)
+        {
+            return actualDate.CompareTo(expectedDate);
+        }
 
         // Conversion en types numériques si possible
         if (actual is IComparable comparableActual && expected is IComparable comparableExpected)
@@ -890,6 +992,113 @@ public class GraphQLiteEngine : IDisposable
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Filtre les arêtes selon les conditions spécifiées
+    /// </summary>
+    private List<Edge> FilterEdgesByConditions(List<Edge> edges, Dictionary<string, object> conditions)
+    {
+        return edges.Where(edge =>
+        {
+            // Séparer les conditions AND et OR
+            var andConditions = new List<KeyValuePair<string, object>>();
+            var orConditions = new List<KeyValuePair<string, object>>();
+
+            foreach (var condition in conditions)
+            {
+                if (condition.Key.StartsWith("Or_"))
+                {
+                    orConditions.Add(condition);
+                }
+                else
+                {
+                    andConditions.Add(condition);
+                }
+            }
+
+            bool andResult = true;
+            if (andConditions.Any())
+            {
+                andResult = andConditions.All(condition => EvaluateEdgeCondition(edge, condition.Key, condition.Value));
+            }
+
+            bool orResult = false;
+            if (orConditions.Any())
+            {
+                orResult = orConditions.Any(condition => EvaluateEdgeCondition(edge, condition.Key, condition.Value));
+            }
+
+            // Logique finale similaire aux nœuds
+            if (andConditions.Any() && orConditions.Any())
+            {
+                return andResult && orResult;
+            }
+            else if (andConditions.Any())
+            {
+                return andResult;
+            }
+            else if (orConditions.Any())
+            {
+                return orResult;
+            }
+            else
+            {
+                return true;
+            }
+        }).ToList();
+    }
+
+    /// <summary>
+    /// Évalue une condition individuelle sur une arête
+    /// </summary>
+    private bool EvaluateEdgeCondition(Edge edge, string conditionKey, object expectedValue)
+    {
+        // Parser la clé de condition
+        var keyParts = conditionKey.Split('_');
+        
+        string property;
+        string @operator;
+
+        if (keyParts.Length == 2)
+        {
+            property = keyParts[0];
+            @operator = keyParts[1];
+        }
+        else if (keyParts.Length == 3)
+        {
+            property = keyParts[1];
+            @operator = keyParts[2];
+        }
+        else
+        {
+            property = conditionKey;
+            @operator = "eq";
+        }
+
+        // Vérifier les propriétés spéciales des arêtes
+        object actualValue = property.ToLower() switch
+        {
+            "type" or "relationtype" => edge.RelationType,
+            _ => edge.Properties.TryGetValue(property, out var propValue) ? propValue : null
+        };
+
+        if (actualValue == null)
+        {
+            return false;
+        }
+
+        // Évaluer selon l'opérateur
+        return @operator.ToLower() switch
+        {
+            "eq" => CompareForEquality(actualValue, expectedValue),
+            "ne" => !CompareForEquality(actualValue, expectedValue),
+            "gt" => CompareValues(actualValue, expectedValue) > 0,
+            "lt" => CompareValues(actualValue, expectedValue) < 0,
+            "ge" => CompareValues(actualValue, expectedValue) >= 0,
+            "le" => CompareValues(actualValue, expectedValue) <= 0,
+            _ => false
+        };
     }
 }
 
