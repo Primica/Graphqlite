@@ -144,12 +144,21 @@ public class NaturalLanguageParser
         if (!match.Success)
             throw new ArgumentException("Format de recherche invalide");
 
-        // Gérer le pluriel/singulier automatiquement
+        // Gérer le pluriel/singulier automatiquement (amélioration pour les pluriels complexes)
         var label = match.Groups[1].Value;
-        if (label.EndsWith("s") && label.Length > 1)
+        
+        // Gestion avancée des pluriels
+        if (label.EndsWith("ies") && label.Length > 3)
         {
-            label = label[..^1]; // Enlever le 's' final
+            // companies → company, industries → industry
+            label = label[..^3] + "y";
         }
+        else if (label.EndsWith("s") && label.Length > 1)
+        {
+            // persons → person, users → user
+            label = label[..^1];
+        }
+        
         parsedQuery.NodeLabel = label;
 
         if (match.Groups[2].Success)
@@ -242,7 +251,22 @@ public class NaturalLanguageParser
         if (!match.Success)
             throw new ArgumentException("Format de comptage invalide");
 
-        parsedQuery.NodeLabel = match.Groups[1].Value;
+        // Gérer le pluriel/singulier automatiquement (amélioration pour les pluriels complexes)
+        var label = match.Groups[1].Value;
+        
+        // Gestion avancée des pluriels
+        if (label.EndsWith("ies") && label.Length > 3)
+        {
+            // companies → company, industries → industry
+            label = label[..^3] + "y";
+        }
+        else if (label.EndsWith("s") && label.Length > 1)
+        {
+            // persons → person, users → user
+            label = label[..^1];
+        }
+        
+        parsedQuery.NodeLabel = label;
 
         if (match.Groups[2].Success)
         {
@@ -291,10 +315,24 @@ public class NaturalLanguageParser
                     _ => "eq"
                 };
                 
-                // Inclure l'opérateur logique dans la clé pour les conditions complexes
-                var conditionKey = part.LogicalOperator == LogicalOperator.None 
-                    ? $"{property}_{normalizedOperator}" 
-                    : $"{part.LogicalOperator}_{property}_{normalizedOperator}";
+                // CORRECTION MAJEURE : Si une requête contient OR, toutes les conditions sont OR sauf celles explicitement AND
+                var hasOrInQuery = parts.Any(p => p.LogicalOperator == LogicalOperator.Or);
+                
+                string conditionKey;
+                if (hasOrInQuery)
+                {
+                    // Si la requête contient des OR, marquer comme OR sauf si explicitement AND
+                    conditionKey = part.LogicalOperator == LogicalOperator.And 
+                        ? $"And_{property}_{normalizedOperator}"
+                        : $"Or_{property}_{normalizedOperator}";
+                }
+                else
+                {
+                    // Requête purement AND ou condition simple
+                    conditionKey = part.LogicalOperator == LogicalOperator.None 
+                        ? $"{property}_{normalizedOperator}" 
+                        : $"{part.LogicalOperator}_{property}_{normalizedOperator}";
+                }
                 
                 conditions[conditionKey] = value;
             }

@@ -451,23 +451,58 @@ public class GraphQLiteEngine : IDisposable
                 }
             }
 
-            // Évaluer les conditions AND (toutes doivent être vraies)
-            bool andResult = andConditions.All(condition =>
+            // CORRECTION FINALE : La logique OR doit être vraiment alternative
+            // Si on a des conditions OR, alors soit toutes les AND sont vraies, soit au moins une OR est vraie
+            // Si on n'a pas de conditions OR, alors toutes les AND doivent être vraies
+            
+            bool andResult = true;
+            if (andConditions.Any())
             {
-                var result = EvaluateCondition(node, condition.Key, condition.Value);
-                Console.WriteLine($"    - Évaluation AND {condition.Key} sur nœud {node.GetProperty<string>("name")}: {result}");
-                return result;
-            });
+                andResult = andConditions.All(condition =>
+                {
+                    var result = EvaluateCondition(node, condition.Key, condition.Value);
+                    Console.WriteLine($"    - Évaluation AND {condition.Key} sur nœud {node.GetProperty<string>("name")}: {result}");
+                    return result;
+                });
+            }
 
-            // Évaluer les conditions OR (au moins une doit être vraie, ou aucune si pas de conditions OR)
-            bool orResult = !orConditions.Any() || orConditions.Any(condition =>
+            bool orResult = false;
+            if (orConditions.Any())
             {
-                var result = EvaluateCondition(node, condition.Key, condition.Value);
-                Console.WriteLine($"    - Évaluation OR {condition.Key} sur nœud {node.GetProperty<string>("name")}: {result}");
-                return result;
-            });
+                orResult = orConditions.Any(condition =>
+                {
+                    var result = EvaluateCondition(node, condition.Key, condition.Value);
+                    Console.WriteLine($"    - Évaluation OR {condition.Key} sur nœud {node.GetProperty<string>("name")}: {result}");
+                    return result;
+                });
+            }
 
-            var finalResult = andResult && orResult;
+            // Logique finale : 
+            // - S'il n'y a que des conditions AND : toutes doivent être vraies
+            // - S'il n'y a que des conditions OR : au moins une doit être vraie  
+            // - S'il y a les deux : toutes les AND DOIVENT être vraies ET au moins une OR DOIT être vraie
+            bool finalResult;
+            if (andConditions.Any() && orConditions.Any())
+            {
+                // Cas mixte : AND ET OR
+                finalResult = andResult && orResult;
+            }
+            else if (andConditions.Any())
+            {
+                // Que des conditions AND
+                finalResult = andResult;
+            }
+            else if (orConditions.Any())
+            {
+                // Que des conditions OR
+                finalResult = orResult;
+            }
+            else
+            {
+                // Aucune condition (ne devrait pas arriver)
+                finalResult = true;
+            }
+            
             Console.WriteLine($"    - Résultat final pour nœud {node.GetProperty<string>("name")}: {finalResult} (AND: {andResult}, OR: {orResult})");
 
             return finalResult;
