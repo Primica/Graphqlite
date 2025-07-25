@@ -678,6 +678,10 @@ public class GraphQLiteEngine : IDisposable
             "ends_with" => EvaluateEndsWithOperator(actualValue, expectedValue),
             "upper" => EvaluateUpperOperator(actualValue, expectedValue),
             "lower" => EvaluateLowerOperator(actualValue, expectedValue),
+            "trim" => EvaluateTrimOperator(actualValue, expectedValue),
+            "length" => EvaluateLengthOperator(actualValue, expectedValue),
+            "substring" => EvaluateSubstringOperator(actualValue, expectedValue),
+            "replace" => EvaluateReplaceOperator(actualValue, expectedValue),
             _ => false
         };
     }
@@ -797,6 +801,160 @@ public class GraphQLiteEngine : IDisposable
             return false;
 
         return actualStr.ToLowerInvariant().Equals(expectedStr.ToLowerInvariant(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Évalue l'opérateur 'trim' pour comparer avec une chaîne sans espaces en début/fin
+    /// </summary>
+    private bool EvaluateTrimOperator(object actualValue, object expectedValue)
+    {
+        if (actualValue is not string actualStr || expectedValue is not string expectedStr)
+            return false;
+
+        return actualStr.Trim().Equals(expectedStr.Trim(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Évalue l'opérateur 'length' pour comparer la longueur d'une chaîne
+    /// </summary>
+    private bool EvaluateLengthOperator(object actualValue, object expectedValue)
+    {
+        if (actualValue is not string actualStr)
+            return false;
+
+        // Si la valeur attendue est un nombre, comparer directement
+        if (expectedValue is int expectedLength)
+        {
+            return actualStr.Length == expectedLength;
+        }
+
+        // Si la valeur attendue est une chaîne, essayer de la convertir en nombre
+        if (expectedValue is string expectedStr && int.TryParse(expectedStr, out var length))
+        {
+            return actualStr.Length == length;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Évalue l'opérateur 'substring' pour vérifier si une chaîne contient une sous-chaîne
+    /// Syntaxe: substring(start,end) ou substring(start)
+    /// </summary>
+    private bool EvaluateSubstringOperator(object actualValue, object expectedValue)
+    {
+        if (actualValue is not string actualStr || expectedValue is not string expectedStr)
+            return false;
+
+        // Parser la syntaxe substring(start,end) ou substring(start)
+        var match = Regex.Match(expectedStr, @"^substring\((\d+)(?:,(\d+))?\s*\)\s*""(.+)""$");
+        if (!match.Success)
+        {
+            // Essayer une syntaxe alternative sans guillemets
+            match = Regex.Match(expectedStr, @"^substring\((\d+)(?:,(\d+))?\s*\)\s*(.+)$");
+        }
+        if (!match.Success)
+            return false;
+
+        if (!int.TryParse(match.Groups[1].Value, out var start))
+            return false;
+
+        int? end = null;
+        if (match.Groups[2].Success && int.TryParse(match.Groups[2].Value, out var endValue))
+        {
+            end = endValue;
+        }
+
+        var expectedSubstring = match.Groups[3].Value;
+
+        // Extraire la sous-chaîne
+        string substring;
+        if (end.HasValue)
+        {
+            if (start >= actualStr.Length || end.Value <= start || end.Value > actualStr.Length)
+                return false;
+            substring = actualStr.Substring(start, end.Value - start);
+        }
+        else
+        {
+            if (start >= actualStr.Length)
+                return false;
+            substring = actualStr.Substring(start);
+        }
+
+        // Comparer avec la valeur attendue
+        return substring.Equals(expectedSubstring, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Évalue l'opérateur 'replace' pour vérifier si une chaîne avec remplacement correspond
+    /// Syntaxe: replace(old,new) ou replace(old,new,count)
+    /// </summary>
+    private bool EvaluateReplaceOperator(object actualValue, object expectedValue)
+    {
+        if (actualValue is not string actualStr || expectedValue is not string expectedStr)
+            return false;
+
+        // Parser la syntaxe replace(old,new) ou replace(old,new,count)
+        var match = Regex.Match(expectedStr, @"^replace\(([^,]+),([^,]+)(?:,(\d+))?\s*\)\s*""(.+)""$");
+        if (!match.Success)
+        {
+            // Essayer une syntaxe alternative sans guillemets
+            match = Regex.Match(expectedStr, @"^replace\(([^,]+),([^,]+)(?:,(\d+))?\s*\)\s*(.+)$");
+        }
+        if (!match.Success)
+            return false;
+
+        var oldValue = match.Groups[1].Value.Trim('"', '\'');
+        var newValue = match.Groups[2].Value.Trim('"', '\'');
+        var expectedResult = match.Groups[4].Value;
+        
+        int? count = null;
+        if (match.Groups[3].Success && int.TryParse(match.Groups[3].Value, out var countValue))
+        {
+            count = countValue;
+        }
+
+        // Effectuer le remplacement
+        string result = actualStr.Replace(oldValue, newValue);
+        
+        // Si un count est spécifié, limiter le nombre de remplacements
+        if (count.HasValue)
+        {
+            // Pour limiter le nombre de remplacements, nous devons le faire manuellement
+            var occurrences = 0;
+            var index = 0;
+            while (occurrences < count.Value && (index = result.IndexOf(oldValue, index)) != -1)
+            {
+                occurrences++;
+                index += oldValue.Length;
+            }
+            
+            // Si nous avons dépassé le count, nous devons recalculer
+            if (occurrences > count.Value)
+            {
+                result = actualStr;
+                occurrences = 0;
+                index = 0;
+                var resultBuilder = new System.Text.StringBuilder();
+                var lastIndex = 0;
+                
+                while (occurrences < count.Value && (index = actualStr.IndexOf(oldValue, index)) != -1)
+                {
+                    resultBuilder.Append(actualStr.Substring(lastIndex, index - lastIndex));
+                    resultBuilder.Append(newValue);
+                    lastIndex = index + oldValue.Length;
+                    index = lastIndex;
+                    occurrences++;
+                }
+                
+                resultBuilder.Append(actualStr.Substring(lastIndex));
+                result = resultBuilder.ToString();
+            }
+        }
+
+        // Comparer avec la valeur attendue
+        return result.Equals(expectedResult, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

@@ -461,13 +461,25 @@ public class NaturalLanguageParser
         {
             // Pattern étendu pour supporter les fonctions de chaînes et opérateurs avancés
             // Correction : inclure les underscores dans les noms d'opérateurs
-            var match = Regex.Match(part.Condition, @"(\w+)\s*(like|starts_with|ends_with|contains|upper|lower|[><=!]+)\s*(.+)");
+            var match = Regex.Match(part.Condition, @"(\w+)\s*(like|starts_with|ends_with|contains|upper|lower|trim|length|substring|replace|[><=!]+)\s*(.+)");
             
             if (match.Success)
             {
                 var property = match.Groups[1].Value;
                 var @operator = match.Groups[2].Value;
-                var value = ParseValue(match.Groups[3].Value.Trim());
+                var valueText = match.Groups[3].Value.Trim();
+                
+                // Traitement spécial pour les fonctions avec paramètres
+                object value;
+                if (@operator == "substring" || @operator == "replace")
+                {
+                    // Pour substring et replace, construire la syntaxe complète
+                    value = $"{@operator}{valueText}";
+                }
+                else
+                {
+                    value = ParseValue(valueText);
+                }
                 
                 // Normaliser les opérateurs
                 var normalizedOperator = @operator switch
@@ -484,6 +496,10 @@ public class NaturalLanguageParser
                     "ends_with" => "ends_with",
                     "upper" => "upper",
                     "lower" => "lower",
+                    "trim" => "trim",
+                    "length" => "length",
+                    "substring" => "substring",
+                    "replace" => "replace",
                     _ => "eq"
                 };
                 
