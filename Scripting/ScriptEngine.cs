@@ -49,7 +49,25 @@ public class ScriptEngine
                 if (string.IsNullOrWhiteSpace(query.Content))
                     continue;
 
-                Console.WriteLine($"[{i + 1}/{queries.Count}] {query.Content.Trim()}");
+                // Support des commandes echo pour l'affichage
+                if (query.Content.Trim().StartsWith("echo "))
+                {
+                    var message = query.Content.Trim().Substring(5).Trim('"');
+                    Console.WriteLine($"[{i + 1}/{queries.Count}] {query.Content}");
+                    Console.WriteLine($"  -> {message}");
+                    Console.WriteLine();
+                    
+                    results.Add(new QueryExecutionResult
+                    {
+                        Query = query.Content,
+                        Success = true,
+                        Message = message
+                    });
+                    successCount++;
+                    continue;
+                }
+
+                Console.WriteLine($"[{i + 1}/{queries.Count}] {query.Content}");
 
                 try
                 {

@@ -459,14 +459,15 @@ public class NaturalLanguageParser
         
         foreach (var part in parts)
         {
-            // Pattern étendu pour supporter l'opérateur 'contains' avec valeurs entre guillemets
-            var match = Regex.Match(part.Condition, @"(\w+)\s*(contains|[><=!]+)\s*([^\s]+|""[^""]*""|'[^']*')");
+            // Pattern étendu pour supporter les fonctions de chaînes et opérateurs avancés
+            // Correction : inclure les underscores dans les noms d'opérateurs
+            var match = Regex.Match(part.Condition, @"(\w+)\s*(like|starts_with|ends_with|contains|upper|lower|[><=!]+)\s*(.+)");
             
             if (match.Success)
             {
                 var property = match.Groups[1].Value;
                 var @operator = match.Groups[2].Value;
-                var value = ParseValue(match.Groups[3].Value);
+                var value = ParseValue(match.Groups[3].Value.Trim());
                 
                 // Normaliser les opérateurs
                 var normalizedOperator = @operator switch
@@ -478,6 +479,11 @@ public class NaturalLanguageParser
                     "=" => "eq",
                     "!=" => "ne",
                     "contains" => "contains",
+                    "like" => "like",
+                    "starts_with" => "starts_with",
+                    "ends_with" => "ends_with",
+                    "upper" => "upper",
+                    "lower" => "lower",
                     _ => "eq"
                 };
                 

@@ -1,8 +1,12 @@
 using GraphQLite.Models;
 using GraphQLite.Storage;
 using GraphQLite.Query;
+using System.Text.RegularExpressions;
 
 namespace GraphQLite.Engine;
+using System;
+using System.Collections.Generic;
+using System.Linq;
 
 /// <summary>
 /// Moteur principal de la base de données GraphQLite
@@ -497,17 +501,13 @@ public class GraphQLiteEngine : IDisposable
 
     private List<Node> FilterNodesByConditions(List<Node> nodes, Dictionary<string, object> conditions)
     {
-        // DEBUG : Ajouter des logs pour diagnostiquer le problème
+        if (!conditions.Any()) return nodes;
+
+        // DEBUG : Logs simplifiés
         Console.WriteLine($"DEBUG: Filtrage {nodes.Count} nœuds avec {conditions.Count} conditions:");
         foreach (var condition in conditions)
         {
             Console.WriteLine($"  - Condition: {condition.Key} = {condition.Value}");
-        }
-
-        // Afficher quelques nœuds pour diagnostic
-        foreach (var node in nodes.Take(3))
-        {
-            Console.WriteLine($"  - Nœud: {node.Label}, propriétés: {string.Join(", ", node.Properties.Select(p => $"{p.Key}={p.Value}"))}");
         }
 
         return nodes.Where(node =>
@@ -528,10 +528,7 @@ public class GraphQLiteEngine : IDisposable
                 }
             }
 
-            // CORRECTION FINALE : La logique OR doit être vraiment alternative
-            // Si on a des conditions OR, alors soit toutes les AND sont vraies, soit au moins une OR est vraie
-            // Si on n'a pas de conditions OR, alors toutes les AND doivent être vraies
-            
+            // Évaluer les conditions AND
             bool andResult = true;
             if (andConditions.Any())
             {
@@ -543,6 +540,7 @@ public class GraphQLiteEngine : IDisposable
                 });
             }
 
+            // Évaluer les conditions OR
             bool orResult = false;
             if (orConditions.Any())
             {
@@ -554,10 +552,7 @@ public class GraphQLiteEngine : IDisposable
                 });
             }
 
-            // Logique finale : 
-            // - S'il n'y a que des conditions AND : toutes doivent être vraies
-            // - S'il n'y a que des conditions OR : au moins une doit être vraie  
-            // - S'il y a les deux : toutes les AND DOIVENT être vraies ET au moins une OR DOIT être vraie
+            // Logique finale
             bool finalResult;
             if (andConditions.Any() && orConditions.Any())
             {
@@ -576,7 +571,7 @@ public class GraphQLiteEngine : IDisposable
             }
             else
             {
-                // Aucune condition (ne devrait pas arriver)
+                // Aucune condition
                 finalResult = true;
             }
             
@@ -597,6 +592,7 @@ public class GraphQLiteEngine : IDisposable
         string property;
         string @operator;
 
+        // Améliorer le parsing pour les opérateurs composés
         if (keyParts.Length == 2)
         {
             // Format: property_operator
@@ -605,17 +601,51 @@ public class GraphQLiteEngine : IDisposable
         }
         else if (keyParts.Length == 3)
         {
-            // Format: And_property_operator ou Or_property_operator
-            property = keyParts[1];
-            @operator = keyParts[2];
+            // Vérifier si c'est un opérateur composé ou And/Or_property_operator
+            if (keyParts[0] == "And" || keyParts[0] == "Or")
+            {
+                // Format: And/Or_property_operator
+                property = keyParts[1];
+                @operator = keyParts[2];
+            }
+            else
+            {
+                // Format: property_operator1_operator2 (ex: name_starts_with)
+                property = keyParts[0];
+                @operator = $"{keyParts[1]}_{keyParts[2]}";
+            }
         }
         else if (keyParts.Length == 4)
         {
-            // CORRECTION : Format avec suffixe numérique: Or_property_operator_N
-            // Exemple: Or_skills_contains_0, Or_skills_contains_1
+            if (keyParts[0] == "And" || keyParts[0] == "Or")
+            {
+                // Format: And/Or_property_operator1_operator2 ou And/Or_property_operator_N
+                if (int.TryParse(keyParts[3], out _))
+                {
+                    // Format: Or_property_operator_N
+                    property = keyParts[1];
+                    @operator = keyParts[2];
+                }
+                else
+                {
+                    // Format: And/Or_property_operator1_operator2
+                    property = keyParts[1];
+                    @operator = $"{keyParts[2]}_{keyParts[3]}";
+                }
+            }
+            else
+            {
+                // Format: property_operator1_operator2_operator3 (rare)
+                property = keyParts[0];
+                @operator = string.Join("_", keyParts.Skip(1));
+            }
+        }
+        else if (keyParts.Length == 5)
+        {
+            // Format: And/Or_property_operator1_operator2_N
             property = keyParts[1];
-            @operator = keyParts[2];
-            // Le keyParts[3] est le suffixe numérique, on l'ignore
+            @operator = $"{keyParts[2]}_{keyParts[3]}";
+            // keyParts[4] est le suffixe numérique
         }
         else
         {
@@ -643,6 +673,11 @@ public class GraphQLiteEngine : IDisposable
             "ge" => CompareValues(actualValue, expectedValue) >= 0,
             "le" => CompareValues(actualValue, expectedValue) <= 0,
             "contains" => EvaluateContainsOperator(actualValue, expectedValue),
+            "like" => EvaluateLikeOperator(actualValue, expectedValue),
+            "starts_with" => EvaluateStartsWithOperator(actualValue, expectedValue),
+            "ends_with" => EvaluateEndsWithOperator(actualValue, expectedValue),
+            "upper" => EvaluateUpperOperator(actualValue, expectedValue),
+            "lower" => EvaluateLowerOperator(actualValue, expectedValue),
             _ => false
         };
     }
@@ -674,6 +709,94 @@ public class GraphQLiteEngine : IDisposable
         
         // Pour les autres types, retourner false
         return false;
+    }
+
+    /// <summary>
+    /// Évalue l'opérateur 'like' pour les patterns de chaînes (avec wildcards % et _)
+    /// </summary>
+    private bool EvaluateLikeOperator(object actualValue, object expectedValue)
+    {
+        if (actualValue is not string actualStr || expectedValue is not string expectedStr)
+            return false;
+
+        // Convertir le pattern LIKE en regex
+        // % = zéro ou plusieurs caractères
+        // _ = exactement un caractère
+        
+        // CORRECTION: D'abord échapper tous les caractères regex sauf % et _
+        var pattern = expectedStr;
+        
+        // Échapper les caractères spéciaux regex sauf % et _
+        pattern = pattern.Replace("\\", "\\\\")  // Échapper les backslashes d'abord
+                        .Replace(".", "\\.")
+                        .Replace("^", "\\^")
+                        .Replace("$", "\\$")
+                        .Replace("+", "\\+")
+                        .Replace("*", "\\*")
+                        .Replace("?", "\\?")
+                        .Replace("{", "\\{")
+                        .Replace("}", "\\}")
+                        .Replace("[", "\\[")
+                        .Replace("]", "\\]")
+                        .Replace("(", "\\(")
+                        .Replace(")", "\\)")
+                        .Replace("|", "\\|");
+        
+        // Maintenant convertir les wildcards LIKE en regex
+        pattern = pattern.Replace("%", ".*")     // % devient .*
+                        .Replace("_", ".");      // _ devient .
+        
+        var regexPattern = "^" + pattern + "$";
+        
+        Console.WriteLine($"        DEBUG LIKE: '{actualStr}' vs pattern '{expectedStr}' -> regex '{regexPattern}'");
+        var result = Regex.IsMatch(actualStr, regexPattern, RegexOptions.IgnoreCase);
+        Console.WriteLine($"        DEBUG LIKE: Résultat = {result}");
+        
+        return result;
+    }
+
+    /// <summary>
+    /// Évalue l'opérateur 'starts_with' pour vérifier le début d'une chaîne
+    /// </summary>
+    private bool EvaluateStartsWithOperator(object actualValue, object expectedValue)
+    {
+        if (actualValue is not string actualStr || expectedValue is not string expectedStr)
+            return false;
+
+        return actualStr.StartsWith(expectedStr, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Évalue l'opérateur 'ends_with' pour vérifier la fin d'une chaîne
+    /// </summary>
+    private bool EvaluateEndsWithOperator(object actualValue, object expectedValue)
+    {
+        if (actualValue is not string actualStr || expectedValue is not string expectedStr)
+            return false;
+
+        return actualStr.EndsWith(expectedStr, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Évalue l'opérateur 'upper' pour comparer avec une chaîne en majuscules
+    /// </summary>
+    private bool EvaluateUpperOperator(object actualValue, object expectedValue)
+    {
+        if (actualValue is not string actualStr || expectedValue is not string expectedStr)
+            return false;
+
+        return actualStr.ToUpperInvariant().Equals(expectedStr.ToUpperInvariant(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Évalue l'opérateur 'lower' pour comparer avec une chaîne en minuscules
+    /// </summary>
+    private bool EvaluateLowerOperator(object actualValue, object expectedValue)
+    {
+        if (actualValue is not string actualStr || expectedValue is not string expectedStr)
+            return false;
+
+        return actualStr.ToLowerInvariant().Equals(expectedStr.ToLowerInvariant(), StringComparison.Ordinal);
     }
 
     /// <summary>
