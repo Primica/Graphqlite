@@ -19,6 +19,12 @@ public class ParsedQuery
     // Propriétés pour les agrégations
     public AggregateFunction? AggregateFunction { get; set; }
     public string? AggregateProperty { get; set; }
+    
+    // Propriétés pour les variables
+    public Dictionary<string, object> Variables { get; set; } = new();
+    public bool IsVariableDefinition { get; set; }
+    public string? VariableName { get; set; }
+    public object? VariableValue { get; set; }
 }
 
 /// <summary>
@@ -38,7 +44,8 @@ public enum QueryType
     DeleteEdge,
     Count,
     ShowSchema,
-    Aggregate
+    Aggregate,
+    DefineVariable
 }
 
 /// <summary>

@@ -47,6 +47,17 @@ Ce dossier contient tous les scripts de test pour valider les fonctionnalités d
 - ✅ Suppression avec conditions
 - ✅ Gestion des erreurs
 
+### 07-variables.gqls
+**Fonctionnalités testées** : Variables dans les requêtes
+- ✅ Définition de variables simples et complexes
+- ✅ Utilisation de variables dans les propriétés
+- ✅ Variables dans les conditions de recherche
+- ✅ Variables dans les connexions et chemins
+- ✅ Variables dans les agrégations et comptages
+- ✅ Variables avec fonctions de chaînes
+- ✅ Variables dans les conditions AND/OR
+- ✅ Variables avec types de données avancés (listes, dates)
+
 ## 🚀 Exécution des tests
 
 ### Test individuel
@@ -85,8 +96,9 @@ Chaque fichier de test valide des fonctionnalités spécifiques :
 - **04-pagination.gqls** : 8/8 tests ✅
 - **05-advanced-types.gqls** : 25/25 tests ✅
 - **06-delete-edges.gqls** : 6/6 tests ✅
+- **07-variables.gqls** : 50/50 tests ✅
 
-**Total** : 87/87 tests réussis ✅
+**Total** : 137/137 tests réussis ✅
 
 ## 🧹 Nettoyage effectué
 

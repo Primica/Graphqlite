@@ -63,6 +63,19 @@ class Program
                 continue;
             }
 
+            if (input.Trim().ToLowerInvariant() == "variables")
+            {
+                ShowVariables(engine);
+                continue;
+            }
+
+            if (input.Trim().ToLowerInvariant() == "clear-variables")
+            {
+                engine.ClearVariables();
+                Console.WriteLine("Toutes les variables ont été supprimées.");
+                continue;
+            }
+
             // Exécuter la requête
             try
             {
@@ -359,6 +372,23 @@ class Program
         if (!schema.NodeSchemas.Any() && !schema.EdgeSchemas.Any())
         {
             Console.WriteLine("  La base de données est vide. Créez des nœuds et des arêtes pour voir le schéma.");
+        }
+    }
+
+    static void ShowVariables(GraphQLiteEngine engine)
+    {
+        var variables = engine.GetVariables();
+        
+        if (variables.Count == 0)
+        {
+            Console.WriteLine("Aucune variable définie.");
+            return;
+        }
+        
+        Console.WriteLine("Variables définies :");
+        foreach (var variable in variables)
+        {
+            Console.WriteLine($"  {variable.Key} = {variable.Value}");
         }
     }
 }

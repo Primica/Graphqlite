@@ -33,9 +33,18 @@ public class Node
     /// </summary>
     public T? GetProperty<T>(string key)
     {
-        if (Properties.TryGetValue(key, out var value) && value is T typedValue)
+        if (Properties.TryGetValue(key, out var value))
         {
-            return typedValue;
+            if (value is T typedValue)
+            {
+                return typedValue;
+            }
+            
+            // Gestion spéciale pour les listes
+            if (typeof(T) == typeof(List<object>) && value is List<object> list)
+            {
+                return (T)(object)list;
+            }
         }
         return default(T);
     }

@@ -34,7 +34,10 @@ public class NaturalLanguageParser
         { "sum", QueryType.Aggregate },
         { "avg", QueryType.Aggregate },
         { "min", QueryType.Aggregate },
-        { "max", QueryType.Aggregate }
+        { "max", QueryType.Aggregate },
+        { "let", QueryType.DefineVariable },
+        { "set", QueryType.DefineVariable },
+        { "var", QueryType.DefineVariable }
     };
 
     /// <summary>
@@ -82,6 +85,9 @@ public class NaturalLanguageParser
                 break;
             case QueryType.Aggregate:
                 ParseAggregate(query, parsedQuery);
+                break;
+            case QueryType.DefineVariable:
+                ParseDefineVariable(query, parsedQuery);
                 break;
             case QueryType.ShowSchema:
                 // Pour les commandes de schéma, aucune autre information n'est nécessaire
@@ -136,16 +142,30 @@ public class NaturalLanguageParser
 
     private void ParseCreateEdge(string query, ParsedQuery parsedQuery)
     {
-        // Pattern: "connect [node1] to [node2] with relationship [type]"
+        // Pattern amélioré pour supporter les variables: "connect [type] [node1] to [type] [node2] with relationship [type]"
         var match = Regex.Match(query, 
-            @"(?:connect|link|relate)\s+(\w+)\s+to\s+(\w+)(?:\s+with\s+relationship\s+(\w+))?");
+            @"(?:connect|link|relate)\s+(\w+)\s+([^\s]+)\s+to\s+(\w+)\s+([^\s]+)(?:\s+with\s+relationship\s+([^\s]+))?");
         
         if (!match.Success)
-            throw new ArgumentException("Format de création d'arête invalide");
+        {
+            // Pattern alternatif sans types: "connect [node1] to [node2] with relationship [type]"
+            match = Regex.Match(query, 
+                @"(?:connect|link|relate)\s+([^\s]+)\s+to\s+([^\s]+)(?:\s+with\s+relationship\s+([^\s]+))?");
+            
+            if (!match.Success)
+                throw new ArgumentException("Format de création d'arête invalide");
 
-        parsedQuery.FromNode = match.Groups[1].Value;
-        parsedQuery.ToNode = match.Groups[2].Value;
-        parsedQuery.EdgeType = match.Groups[3].Success ? match.Groups[3].Value : "connected_to";
+            parsedQuery.FromNode = match.Groups[1].Value;
+            parsedQuery.ToNode = match.Groups[2].Value;
+            parsedQuery.EdgeType = match.Groups[3].Success ? match.Groups[3].Value : "connected_to";
+        }
+        else
+        {
+            // Pattern avec types: "connect person $fromPerson to company $toCompany with relationship $relationship"
+            parsedQuery.FromNode = match.Groups[2].Value; // Le nœud source (après le type)
+            parsedQuery.ToNode = match.Groups[4].Value;   // Le nœud destination (après le type)
+            parsedQuery.EdgeType = match.Groups[5].Success ? match.Groups[5].Value : "connected_to";
+        }
     }
 
     private void ParseFindNodes(string query, ParsedQuery parsedQuery)
@@ -195,8 +215,8 @@ public class NaturalLanguageParser
 
     private void ParseFindPath(string query, ParsedQuery parsedQuery)
     {
-        // Pattern: "find path from [node1] to [node2]"
-        var match = Regex.Match(query, @"find\s+path\s+from\s+(\w+)\s+to\s+(\w+)");
+        // Pattern amélioré pour supporter les variables: "find path from [node1] to [node2]"
+        var match = Regex.Match(query, @"find\s+path\s+from\s+([^\s]+)\s+to\s+([^\s]+)");
         
         if (!match.Success)
             throw new ArgumentException("Format de recherche de chemin invalide");
@@ -207,27 +227,53 @@ public class NaturalLanguageParser
 
     private void ParseFindWithinSteps(string query, ParsedQuery parsedQuery)
     {
-        // Pattern: "find [label] from [node1] to [node2] over [steps] steps"
-        var match = Regex.Match(query, @"find\s+(\w+)\s+from\s+(\w+)\s+to\s+(\w+)\s+over\s+(\d+)\s+steps?", RegexOptions.IgnoreCase);
+        // Pattern amélioré pour supporter les variables: "find [label] from [node1] to [node2] over [steps] steps"
+        var match = Regex.Match(query, @"find\s+(\w+)\s+from\s+([^\s]+)\s+to\s+([^\s]+)\s+over\s+([^\s]+)\s+steps?", RegexOptions.IgnoreCase);
         
         if (!match.Success)
         {
-            // Pattern alternatif: "find [label] from [node1] over [steps] steps"  
-            match = Regex.Match(query, @"find\s+(\w+)\s+from\s+(\w+)\s+over\s+(\d+)\s+steps?", RegexOptions.IgnoreCase);
+            // Pattern alternatif amélioré: "find [label] from [node1] over [steps] steps"  
+            match = Regex.Match(query, @"find\s+(\w+)\s+from\s+([^\s]+)\s+over\s+([^\s]+)\s+steps?", RegexOptions.IgnoreCase);
             
             if (!match.Success)
                 throw new ArgumentException("Format de recherche dans les étapes invalide");
 
             parsedQuery.NodeLabel = match.Groups[1].Value;
             parsedQuery.FromNode = match.Groups[2].Value;
-            parsedQuery.MaxSteps = int.Parse(match.Groups[3].Value);
+            
+            // Parser le nombre d'étapes (peut être une variable)
+            var stepsValue = match.Groups[3].Value;
+            
+            if (int.TryParse(stepsValue, out int steps))
+            {
+                parsedQuery.MaxSteps = steps;
+            }
+            else
+            {
+                // Si ce n'est pas un nombre, c'est probablement une variable
+                // On va stocker la valeur dans une propriété temporaire
+                parsedQuery.Properties["_maxStepsVariable"] = stepsValue;
+                parsedQuery.MaxSteps = 0; // Sera remplacé par la variable
+            }
         }
         else
         {
             parsedQuery.NodeLabel = match.Groups[1].Value;
             parsedQuery.FromNode = match.Groups[2].Value;
             parsedQuery.ToNode = match.Groups[3].Value;
-            parsedQuery.MaxSteps = int.Parse(match.Groups[4].Value);
+            
+            // Parser le nombre d'étapes (peut être une variable)
+            if (int.TryParse(match.Groups[4].Value, out int steps))
+            {
+                parsedQuery.MaxSteps = steps;
+            }
+            else
+            {
+                // Si ce n'est pas un nombre, c'est probablement une variable
+                // On va stocker la valeur dans une propriété temporaire
+                parsedQuery.Properties["_maxStepsVariable"] = match.Groups[4].Value;
+                parsedQuery.MaxSteps = 0; // Sera remplacé par la variable
+            }
         }
     }
 
@@ -324,8 +370,8 @@ public class NaturalLanguageParser
 
     private void ParseAggregate(string query, ParsedQuery parsedQuery)
     {
-        // Pattern: "sum|avg|min|max [label] property [property_name] [where conditions]"
-        var match = Regex.Match(query, @"(sum|avg|min|max)\s+(\w+)\s+property\s+(\w+)(?:\s+where\s+(.+))?$", RegexOptions.IgnoreCase);
+        // Pattern amélioré pour supporter les variables: "sum|avg|min|max [label] property [property_name] [where conditions]"
+        var match = Regex.Match(query, @"(sum|avg|min|max)\s+(\w+)\s+property\s+([^\s]+)(?:\s+where\s+(.+))?$", RegexOptions.IgnoreCase);
         
         if (!match.Success)
             throw new ArgumentException("Format d'agrégation invalide. Utiliser: sum|avg|min|max [label] property [property_name] [where conditions]");
@@ -360,6 +406,41 @@ public class NaturalLanguageParser
         {
             ParseConditions(match.Groups[4].Value, parsedQuery.Conditions);
         }
+    }
+
+    private void ParseDefineVariable(string query, ParsedQuery parsedQuery)
+    {
+        // Patterns supportés:
+        // "let variable = value"
+        // "set variable = value" 
+        // "var variable = value"
+        var patterns = new[]
+        {
+            @"(let|set|var)\s+(\w+)\s*=\s*(.+)$",
+            @"(\w+)\s*=\s*(.+)$" // Format simple: "variable = value"
+        };
+        
+        foreach (var pattern in patterns)
+        {
+            var match = Regex.Match(query, pattern);
+            if (match.Success)
+            {
+                parsedQuery.VariableName = match.Groups[2].Value;
+                parsedQuery.VariableValue = ParseValue(match.Groups[3].Value.Trim());
+                return;
+            }
+        }
+        
+        // Si aucun pattern ne correspond, essayer de parser comme une simple assignation
+        var simpleMatch = Regex.Match(query, @"^(\w+)\s*=\s*(.+)$");
+        if (simpleMatch.Success)
+        {
+            parsedQuery.VariableName = simpleMatch.Groups[1].Value;
+            parsedQuery.VariableValue = ParseValue(simpleMatch.Groups[2].Value.Trim());
+            return;
+        }
+        
+        throw new ArgumentException($"Format de définition de variable invalide: '{query}'. Utilisez: let variable = value");
     }
 
     private void ParseProperties(string propertiesText, Dictionary<string, object> properties)
@@ -474,7 +555,13 @@ public class NaturalLanguageParser
                 if (@operator == "substring" || @operator == "replace")
                 {
                     // Pour substring et replace, construire la syntaxe complète
+                    // Les variables seront traitées plus tard dans le moteur
                     value = $"{@operator}{valueText}";
+                }
+                else if (@operator == "trim")
+                {
+                    // Pour trim, la valeur attendue est la chaîne après trim
+                    value = ParseValue(valueText);
                 }
                 else
                 {
