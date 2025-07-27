@@ -81,9 +81,17 @@ public class VariableManager
             result = System.Text.RegularExpressions.Regex.Replace(result, pattern, match =>
             {
                 var varName = match.Groups[1].Value;
-                if (_variables.TryGetValue(varName, out var value))
+                
+                // Rechercher la variable de manière insensible à la casse
+                // Essayer d'abord avec le nom exact, puis avec différentes variations
+                var foundVariable = _variables.FirstOrDefault(kvp => 
+                    string.Equals(kvp.Key, varName, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(kvp.Key, "$" + varName, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(kvp.Key.TrimStart('$'), varName, StringComparison.OrdinalIgnoreCase));
+                
+                if (foundVariable.Key != null)
                 {
-                    return value?.ToString() ?? "";
+                    return foundVariable.Value?.ToString() ?? "";
                 }
                 return match.Value; // Garde la référence si la variable n'existe pas
             });

@@ -208,6 +208,24 @@ class Program
             Console.WriteLine();
 
             var scriptEngine = new GraphQLite.Scripting.ScriptEngine(engine);
+            
+            // Validation du script avant exécution
+            Console.WriteLine("Validation de la syntaxe du script...");
+            var validationResult = scriptEngine.ValidateScript(scriptPath);
+            
+            if (!validationResult.IsValid)
+            {
+                Console.WriteLine("Erreurs de validation détectées :");
+                foreach (var error in validationResult.Errors)
+                {
+                    Console.WriteLine($"  • {error}");
+                }
+                Environment.Exit(1);
+            }
+            
+            Console.WriteLine($"Script valide ({validationResult.QueryCount} requêtes détectées)");
+            Console.WriteLine();
+
             var scriptResult = await scriptEngine.ExecuteScriptAsync(scriptPath);
             
             if (!scriptResult.Success)
@@ -216,11 +234,14 @@ class Program
                 Environment.Exit(1);
             }
 
-            Environment.Exit(scriptResult.ErrorCount > 0 ? 1 : 0);
+            // Code de sortie basé sur le nombre d'erreurs
+            var exitCode = scriptResult.ErrorCount > 0 ? 1 : 0;
+            Console.WriteLine($"\nScript terminé avec le code de sortie : {exitCode}");
+            Environment.Exit(exitCode);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Erreur : {ex.Message}");
+            Console.WriteLine($"Erreur fatale : {ex.Message}");
             Environment.Exit(1);
         }
     }

@@ -25,6 +25,126 @@ public class ParsedQuery
     public bool IsVariableDefinition { get; set; }
     public string? VariableName { get; set; }
     public object? VariableValue { get; set; }
+    
+    // Propriétés pour les opérations en lot
+    public List<ParsedQuery> BatchOperations { get; set; } = new();
+    public BatchOperationType? BatchType { get; set; }
+    public string? BatchFile { get; set; }
+    public bool IsBatchOperation { get; set; }
+    public int? BatchSize { get; set; }
+    public bool IsAtomic { get; set; } = false;
+    public Dictionary<string, object> BatchMetadata { get; set; } = new();
+    
+    // Propriétés pour les sous-requêtes
+    public List<ParsedQuery> SubQueries { get; set; } = new();
+    public SubQueryOperator SubQueryOperator { get; set; }
+    public string? SubQueryProperty { get; set; }
+    public bool HasSubQueries => SubQueries.Count > 0;
+    public ParsedQuery? ParentQuery { get; set; }
+    public int SubQueryDepth { get; set; } = 0;
+    
+    // Propriétés pour la validation et les erreurs
+    public List<string> ValidationErrors { get; set; } = new();
+    public bool IsValid => !ValidationErrors.Any();
+    
+    // Propriétés pour les performances
+    public DateTime ParsedAt { get; set; } = DateTime.UtcNow;
+    public TimeSpan ParseDuration { get; set; }
+    public Dictionary<string, object> PerformanceMetrics { get; set; } = new();
+    
+    /// <summary>
+    /// Valide la requête parsée
+    /// </summary>
+    public void Validate()
+    {
+        ValidationErrors.Clear();
+        
+        // Validation du type de requête
+        if (Type == QueryType.BatchOperation && BatchType == null)
+        {
+            ValidationErrors.Add("Type d'opération batch requis pour les requêtes batch");
+        }
+        
+        // Validation des sous-requêtes
+        if (HasSubQueries && SubQueryDepth > 5)
+        {
+            ValidationErrors.Add($"Profondeur de sous-requête trop élevée: {SubQueryDepth} (max: 5)");
+        }
+        
+        // Validation des opérations batch
+        if (Type == QueryType.BatchOperation)
+        {
+            ValidateBatchOperation();
+        }
+        
+        // Validation des sous-requêtes
+        foreach (var subQuery in SubQueries)
+        {
+            subQuery.Validate();
+            ValidationErrors.AddRange(subQuery.ValidationErrors.Select(e => $"Sous-requête: {e}"));
+        }
+        
+        // Validation des opérations batch prédéfinies
+        foreach (var batchOp in BatchOperations)
+        {
+            batchOp.Validate();
+            ValidationErrors.AddRange(batchOp.ValidationErrors.Select(e => $"Opération batch: {e}"));
+        }
+    }
+    
+    private void ValidateBatchOperation()
+    {
+        if (BatchOperations.Any() && BatchType != null)
+        {
+            ValidationErrors.Add("Ne peut pas avoir à la fois des opérations batch prédéfinies et un type batch");
+        }
+        
+        if (BatchSize.HasValue && BatchSize.Value <= 0)
+        {
+            ValidationErrors.Add("La taille du batch doit être positive");
+        }
+        
+        if (IsAtomic && BatchOperations.Count > 1000)
+        {
+            ValidationErrors.Add("Les opérations atomiques sont limitées à 1000 opérations");
+        }
+    }
+    
+    /// <summary>
+    /// Clone la requête pour les opérations batch
+    /// </summary>
+    public ParsedQuery Clone()
+    {
+        return new ParsedQuery
+        {
+            Type = Type,
+            NodeLabel = NodeLabel,
+            EdgeType = EdgeType,
+            Properties = new Dictionary<string, object>(Properties),
+            Conditions = new Dictionary<string, object>(Conditions),
+            FromNode = FromNode,
+            ToNode = ToNode,
+            Limit = Limit,
+            Offset = Offset,
+            MaxSteps = MaxSteps,
+            AggregateFunction = AggregateFunction,
+            AggregateProperty = AggregateProperty,
+            Variables = new Dictionary<string, object>(Variables),
+            IsVariableDefinition = IsVariableDefinition,
+            VariableName = VariableName,
+            VariableValue = VariableValue,
+            BatchType = BatchType,
+            BatchFile = BatchFile,
+            IsBatchOperation = IsBatchOperation,
+            BatchSize = BatchSize,
+            IsAtomic = IsAtomic,
+            BatchMetadata = new Dictionary<string, object>(BatchMetadata),
+            SubQueryOperator = SubQueryOperator,
+            SubQueryProperty = SubQueryProperty,
+            ParentQuery = ParentQuery,
+            SubQueryDepth = SubQueryDepth
+        };
+    }
 }
 
 /// <summary>
@@ -45,7 +165,25 @@ public enum QueryType
     Count,
     ShowSchema,
     Aggregate,
-    DefineVariable
+    DefineVariable,
+    BatchOperation,
+    SubQuery,
+    BulkInsert,
+    Transaction
+}
+
+/// <summary>
+/// Types d'opérations en lot supportées
+/// </summary>
+public enum BatchOperationType
+{
+    Create,
+    Update,
+    Delete,
+    Upsert,
+    Mixed,
+    Atomic,
+    Parallel
 }
 
 /// <summary>
@@ -57,5 +195,24 @@ public enum AggregateFunction
     Avg,
     Min,
     Max,
-    Count
+    Count,
+    StdDev,
+    Variance,
+    Median
+}
+
+/// <summary>
+/// Opérateurs pour les sous-requêtes
+/// </summary>
+public enum SubQueryOperator
+{
+    In,
+    NotIn,
+    Exists,
+    NotExists,
+    Contains,
+    NotContains,
+    Any,
+    All,
+    None
 }

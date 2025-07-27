@@ -58,6 +58,16 @@ Ce dossier contient tous les scripts de test pour valider les fonctionnalités d
 - ✅ Variables dans les conditions AND/OR
 - ✅ Variables avec types de données avancés (listes, dates)
 
+### 08-batch-operations.gqls
+**Fonctionnalités testées** : Opérations en lot
+- ✅ Création en lot de nœuds avec propriétés
+- ✅ Mise à jour en lot avec conditions WHERE
+- ✅ Suppression en lot avec conditions
+- ✅ Variables dans les opérations en lot
+- ✅ Gestion des erreurs et validation
+- ✅ Tests de performance et volume
+- ✅ Agrégations après opérations en lot
+
 ## 🚀 Exécution des tests
 
 ### Test individuel
@@ -84,6 +94,9 @@ dotnet run --script tests/02-basic-functionality.gqls
 
 # Tests d'agrégation
 dotnet run --script tests/03-aggregations.gqls
+
+# Tests d'opérations en lot
+dotnet run --script tests/08-batch-operations.gqls
 ```
 
 ## 📊 Validation des fonctionnalités
@@ -97,8 +110,9 @@ Chaque fichier de test valide des fonctionnalités spécifiques :
 - **05-advanced-types.gqls** : 25/25 tests ✅
 - **06-delete-edges.gqls** : 6/6 tests ✅
 - **07-variables.gqls** : 50/50 tests ✅
+- **08-batch-operations.gqls** : 26/26 tests ✅
 
-**Total** : 137/137 tests réussis ✅
+**Total** : 163/163 tests réussis ✅
 
 ## 🧹 Nettoyage effectué
 
