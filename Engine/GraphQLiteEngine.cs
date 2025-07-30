@@ -79,9 +79,11 @@ public class GraphQLiteEngine : IDisposable
             QueryType.CreateNode => CreateNodeAsync(query),
             QueryType.CreateEdge => CreateEdgeAsync(query),
             QueryType.FindNodes => FindNodesAsync(query),
+            QueryType.FindEdges => FindEdgesAsync(query),
             QueryType.FindPath => FindPathAsync(query),
             QueryType.FindWithinSteps => FindWithinStepsAsync(query),
             QueryType.UpdateNode => UpdateNodeAsync(query),
+            QueryType.UpdateEdge => UpdateEdgeAsync(query),
             QueryType.DeleteNode => DeleteNodeAsync(query),
             QueryType.DeleteEdge => DeleteEdgeAsync(query),
             QueryType.Count => CountNodesAsync(query),
@@ -99,6 +101,12 @@ public class GraphQLiteEngine : IDisposable
         {
             // Les variables ont déjà été remplacées dans ReplaceVariablesInParsedQuery
             var node = new Node(query.NodeLabel ?? "node", query.Properties);
+            
+            // S'assurer que toutes les propriétés sont correctement assignées
+            foreach (var property in query.Properties)
+            {
+                node.SetProperty(property.Key, property.Value);
+            }
             
             _storage.AddNode(node);
             
@@ -121,30 +129,94 @@ public class GraphQLiteEngine : IDisposable
 
     private Task<QueryResult> CreateEdgeAsync(ParsedQuery query)
     {
-        // Chercher les nœuds par nom (propriété "name")
-        var fromNodes = _storage.GetAllNodes()
-            .Where(n => n.GetProperty<string>("name")?.Equals(query.FromNode, StringComparison.OrdinalIgnoreCase) == true)
-            .ToList();
-
-        var toNodes = _storage.GetAllNodes()
-            .Where(n => n.GetProperty<string>("name")?.Equals(query.ToNode, StringComparison.OrdinalIgnoreCase) == true)
-            .ToList();
-
-        if (!fromNodes.Any())
-            return Task.FromResult(new QueryResult { Success = false, Error = $"Nœud source '{query.FromNode}' introuvable" });
-
-        if (!toNodes.Any())
-            return Task.FromResult(new QueryResult { Success = false, Error = $"Nœud destination '{query.ToNode}' introuvable" });
-
-        var edge = new Edge(fromNodes.First().Id, toNodes.First().Id, query.EdgeType!, query.Properties);
-        _storage.AddEdge(edge);
-
-        return Task.FromResult(new QueryResult
+        try
         {
-            Success = true,
-            Message = $"Arête créée avec l'ID : {edge.Id}",
-            Data = new { EdgeId = edge.Id, Edge = edge }
-        });
+            // Parser les noms avec labels et guillemets
+            var fromNodeInfo = ParseNodeReference(query.FromNode!);
+            var toNodeInfo = ParseNodeReference(query.ToNode!);
+            
+            // Chercher les nœuds par nom avec gestion des labels
+            var fromNodes = _storage.GetAllNodes()
+                .Where(n => MatchesNodeReference(n, fromNodeInfo))
+                .ToList();
+
+            var toNodes = _storage.GetAllNodes()
+                .Where(n => MatchesNodeReference(n, toNodeInfo))
+                .ToList();
+
+            if (!fromNodes.Any())
+                return Task.FromResult(new QueryResult { Success = false, Error = $"Nœud source '{query.FromNode}' introuvable" });
+
+            if (!toNodes.Any())
+                return Task.FromResult(new QueryResult { Success = false, Error = $"Nœud destination '{query.ToNode}' introuvable" });
+
+            var edge = new Edge(fromNodes.First().Id, toNodes.First().Id, query.EdgeType!, query.Properties);
+            _storage.AddEdge(edge);
+
+            return Task.FromResult(new QueryResult
+            {
+                Success = true,
+                Message = $"Arête créée avec l'ID : {edge.Id}",
+                Data = new { EdgeId = edge.Id, Edge = edge }
+            });
+        }
+        catch (Exception ex)
+        {
+            return Task.FromResult(new QueryResult
+            {
+                Success = false,
+                Error = $"Erreur lors de la création de l'arête : {ex.Message}"
+            });
+        }
+    }
+
+    /// <summary>
+    /// Parse une référence de nœud (label "nom" ou juste nom)
+    /// </summary>
+    private (string? Label, string Name) ParseNodeReference(string nodeReference)
+    {
+        // Pattern pour "label "nom"" - gère les espaces dans les noms
+        var match = Regex.Match(nodeReference, @"^(\w+)\s+""([^""]+)""$");
+        if (match.Success)
+        {
+            return (match.Groups[1].Value, match.Groups[2].Value);
+        }
+        
+        // Pattern alternatif pour "label nom" (sans guillemets)
+        var matchWithoutQuotes = Regex.Match(nodeReference, @"^(\w+)\s+(.+)$");
+        if (matchWithoutQuotes.Success)
+        {
+            return (matchWithoutQuotes.Groups[1].Value, matchWithoutQuotes.Groups[2].Value);
+        }
+        
+        // Pattern pour "label nom" avec espaces dans le nom (sans guillemets)
+        var matchWithSpaces = Regex.Match(nodeReference, @"^(\w+)\s+(.+)$");
+        if (matchWithSpaces.Success)
+        {
+            return (matchWithSpaces.Groups[1].Value, matchWithSpaces.Groups[2].Value);
+        }
+        
+        // Sinon, c'est juste un nom
+        return (null, nodeReference);
+    }
+
+    /// <summary>
+    /// Vérifie si un nœud correspond à une référence
+    /// </summary>
+    private bool MatchesNodeReference(Node node, (string? Label, string Name) reference)
+    {
+        // Vérifier le nom d'abord
+        var nodeName = node.GetProperty<string>("name");
+        if (nodeName == null || !nodeName.Equals(reference.Name, StringComparison.OrdinalIgnoreCase))
+            return false;
+        
+        // Si un label est spécifié, vérifier qu'il correspond
+        if (reference.Label != null)
+        {
+            return node.Label.Equals(reference.Label, StringComparison.OrdinalIgnoreCase);
+        }
+        
+        return true;
     }
 
     private async Task<QueryResult> FindNodesAsync(ParsedQuery query)
@@ -176,6 +248,137 @@ public class GraphQLiteEngine : IDisposable
         };
     }
 
+    private Task<QueryResult> FindEdgesAsync(ParsedQuery query)
+    {
+        try
+        {
+            var allEdges = _storage.GetAllEdges();
+            var filteredEdges = new List<Edge>();
+
+            // Si des nœuds source et destination sont spécifiés
+            if (!string.IsNullOrEmpty(query.FromNode) && !string.IsNullOrEmpty(query.ToNode))
+            {
+                var fromNodeInfo = ParseNodeReference(query.FromNode);
+                var toNodeInfo = ParseNodeReference(query.ToNode);
+                
+                var fromNodes = _storage.GetAllNodes()
+                    .Where(n => MatchesNodeReference(n, fromNodeInfo))
+                    .ToList();
+
+                var toNodes = _storage.GetAllNodes()
+                    .Where(n => MatchesNodeReference(n, toNodeInfo))
+                    .ToList();
+
+                if (!fromNodes.Any())
+                {
+                    return Task.FromResult(new QueryResult
+                    {
+                        Success = false,
+                        Error = $"Nœud source '{query.FromNode}' introuvable"
+                    });
+                }
+
+                if (!toNodes.Any())
+                {
+                    return Task.FromResult(new QueryResult
+                    {
+                        Success = false,
+                        Error = $"Nœud destination '{query.ToNode}' introuvable"
+                    });
+                }
+
+                var fromNodeId = fromNodes.First().Id;
+                var toNodeId = toNodes.First().Id;
+
+                filteredEdges = allEdges.Where(e => 
+                    (e.FromNodeId == fromNodeId && e.ToNodeId == toNodeId) ||
+                    (e.FromNodeId == toNodeId && e.ToNodeId == fromNodeId) // Support bidirectionnel
+                ).ToList();
+            }
+            // Si seulement le nœud source est spécifié
+            else if (!string.IsNullOrEmpty(query.FromNode))
+            {
+                var fromNodeInfo = ParseNodeReference(query.FromNode);
+                var fromNodes = _storage.GetAllNodes()
+                    .Where(n => MatchesNodeReference(n, fromNodeInfo))
+                    .ToList();
+
+                if (!fromNodes.Any())
+                {
+                    return Task.FromResult(new QueryResult
+                    {
+                        Success = false,
+                        Error = $"Nœud source '{query.FromNode}' introuvable"
+                    });
+                }
+
+                var fromNodeId = fromNodes.First().Id;
+                filteredEdges = allEdges.Where(e => 
+                    e.FromNodeId == fromNodeId || e.ToNodeId == fromNodeId
+                ).ToList();
+            }
+            // Si seulement le nœud destination est spécifié
+            else if (!string.IsNullOrEmpty(query.ToNode))
+            {
+                var toNodeInfo = ParseNodeReference(query.ToNode);
+                var toNodes = _storage.GetAllNodes()
+                    .Where(n => MatchesNodeReference(n, toNodeInfo))
+                    .ToList();
+
+                if (!toNodes.Any())
+                {
+                    return Task.FromResult(new QueryResult
+                    {
+                        Success = false,
+                        Error = $"Nœud destination '{query.ToNode}' introuvable"
+                    });
+                }
+
+                var toNodeId = toNodes.First().Id;
+                filteredEdges = allEdges.Where(e => 
+                    e.FromNodeId == toNodeId || e.ToNodeId == toNodeId
+                ).ToList();
+            }
+            // Si aucun nœud spécifique, retourner toutes les arêtes
+            else
+            {
+                filteredEdges = allEdges;
+            }
+
+            // Appliquer les conditions si présentes
+            if (query.Conditions.Any())
+            {
+                filteredEdges = FilterEdgesByConditions(filteredEdges, query.Conditions);
+            }
+
+            // Appliquer la pagination
+            if (query.Offset.HasValue)
+            {
+                filteredEdges = filteredEdges.Skip(query.Offset.Value).ToList();
+            }
+
+            if (query.Limit.HasValue)
+            {
+                filteredEdges = filteredEdges.Take(query.Limit.Value).ToList();
+            }
+
+            return Task.FromResult(new QueryResult
+            {
+                Success = true,
+                Message = $"{filteredEdges.Count} arête(s) trouvée(s)",
+                Data = filteredEdges
+            });
+        }
+        catch (Exception ex)
+        {
+            return Task.FromResult(new QueryResult
+            {
+                Success = false,
+                Error = $"Erreur lors de la recherche d'arêtes : {ex.Message}"
+            });
+        }
+    }
+
     private Task<QueryResult> FindPathAsync(ParsedQuery query)
     {
         try
@@ -193,13 +396,17 @@ public class GraphQLiteEngine : IDisposable
                 });
             }
             
+            // Parser les références de nœuds avec labels et guillemets
+            var fromNodeInfo = ParseNodeReference(fromNodeName);
+            var toNodeInfo = ParseNodeReference(toNodeName);
+            
             // Recherche de chemin simple (BFS)
             var fromNodes = _storage.GetAllNodes()
-                .Where(n => n.GetProperty<string>("name")?.Equals(fromNodeName, StringComparison.OrdinalIgnoreCase) == true)
+                .Where(n => MatchesNodeReference(n, fromNodeInfo))
                 .ToList();
 
             var toNodes = _storage.GetAllNodes()
-                .Where(n => n.GetProperty<string>("name")?.Equals(toNodeName, StringComparison.OrdinalIgnoreCase) == true)
+                .Where(n => MatchesNodeReference(n, toNodeInfo))
                 .ToList();
 
             if (!fromNodes.Any())
@@ -220,7 +427,24 @@ public class GraphQLiteEngine : IDisposable
                 });
             }
 
-            var path = FindShortestPath(fromNodes.First().Id, toNodes.First().Id);
+            var fromNodeId = fromNodes.First().Id;
+            var toNodeId = toNodes.First().Id;
+
+            // Vérifier si c'est un chemin bidirectionnel
+            var isBidirectional = query.Properties.ContainsKey("bidirectional") && 
+                                 (bool)query.Properties["bidirectional"];
+
+            // Vérifier s'il y a un type d'arête à éviter
+            var avoidEdgeType = query.Properties.ContainsKey("avoid_edge_type") ? 
+                               query.Properties["avoid_edge_type"].ToString() : null;
+
+            // Vérifier s'il y a un type d'arête spécifique à utiliser
+            var viaEdgeType = !string.IsNullOrEmpty(query.EdgeType) ? query.EdgeType : null;
+
+            // Vérifier le nombre maximum d'étapes
+            var maxSteps = query.MaxSteps ?? 100; // Limite par défaut
+
+            var path = FindAdvancedPath(fromNodeId, toNodeId, viaEdgeType, avoidEdgeType, maxSteps, isBidirectional);
 
             if (!path.Any())
             {
@@ -267,8 +491,11 @@ public class GraphQLiteEngine : IDisposable
                 });
             }
             
+            // Parser la référence de nœud avec labels et guillemets
+            var fromNodeInfo = ParseNodeReference(fromNodeName);
+            
             var fromNodes = _storage.GetAllNodes()
-                .Where(n => n.GetProperty<string>("name")?.Equals(fromNodeName, StringComparison.OrdinalIgnoreCase) == true)
+                .Where(n => MatchesNodeReference(n, fromNodeInfo))
                 .ToList();
 
             if (!fromNodes.Any())
@@ -280,7 +507,22 @@ public class GraphQLiteEngine : IDisposable
                 });
             }
 
-            var foundNodes = FindNodesWithinSteps(fromNodes.First().Id, targetLabel, maxSteps);
+            var fromNodeId = fromNodes.First().Id;
+
+            // Vérifier s'il y a un type d'arête spécifique à utiliser
+            var viaEdgeType = !string.IsNullOrEmpty(query.EdgeType) ? query.EdgeType : null;
+
+            // Vérifier s'il y a un type d'arête à éviter
+            var avoidEdgeType = query.Properties.ContainsKey("avoid_edge_type") ? 
+                               query.Properties["avoid_edge_type"].ToString() : null;
+
+            var foundNodes = FindNodesWithinStepsAdvanced(fromNodeId, targetLabel, maxSteps, viaEdgeType, avoidEdgeType);
+
+            // Appliquer les conditions si présentes
+            if (query.Conditions.Any())
+            {
+                foundNodes = FilterNodesByConditionsSync(foundNodes, query.Conditions);
+            }
 
             return Task.FromResult(new QueryResult
             {
@@ -410,6 +652,18 @@ public class GraphQLiteEngine : IDisposable
 
     private Task<QueryResult> CountNodesAsync(ParsedQuery query)
     {
+        // Vérifier si c'est un comptage d'arêtes
+        if (query.Properties.ContainsKey("count_edges"))
+        {
+            return CountEdgesAsync(query);
+        }
+        
+        // Vérifier si c'est un comptage d'arêtes par type
+        if (query.NodeLabel == "edges" || query.NodeLabel == "edge")
+        {
+            return CountEdgesAsync(query);
+        }
+        
         var nodes = _storage.GetNodesByLabel(query.NodeLabel!);
 
         if (query.Conditions.Any())
@@ -433,6 +687,23 @@ public class GraphQLiteEngine : IDisposable
             Success = true,
             Message = $"Nombre de nœuds : {nodes.Count}",
             Data = nodes.Count
+        });
+    }
+
+    private Task<QueryResult> CountEdgesAsync(ParsedQuery query)
+    {
+        var edges = _storage.GetAllEdges();
+        
+        if (query.Conditions.Any())
+        {
+            edges = FilterEdgesByConditions(edges, query.Conditions);
+        }
+
+        return Task.FromResult(new QueryResult
+        {
+            Success = true,
+            Message = $"Nombre d'arêtes : {edges.Count}",
+            Data = edges.Count
         });
     }
 
@@ -698,1915 +969,251 @@ public class GraphQLiteEngine : IDisposable
     /// </summary>
     private async Task<bool> EvaluateConditionAsync(Node node, string conditionKey, object expectedValue)
     {
-        // Vérifier si c'est une sous-requête
-        if (expectedValue is ParsedQuery subQuery)
-        {
-            return await EvaluateSubQueryConditionAsync(node, conditionKey, subQuery);
-        }
-
-        // Parser la clé de condition avec support des suffixes numériques pour les conditions OR
-        var keyParts = conditionKey.Split('_');
-        
-        string property;
-        string @operator;
-
-        // Améliorer le parsing pour les opérateurs composés
-        if (keyParts.Length == 2)
-        {
-            // Format: property_operator
-            property = keyParts[0];
-            @operator = keyParts[1];
-        }
-        else if (keyParts.Length == 3)
-        {
-            // Vérifier si c'est un opérateur composé ou And/Or_property_operator
-            if (keyParts[0] == "And" || keyParts[0] == "Or")
-            {
-                // Format: And/Or_property_operator
-                property = keyParts[1];
-                @operator = keyParts[2];
-            }
-            else
-            {
-                // Format: property_operator1_operator2 (ex: name_starts_with)
-                property = keyParts[0];
-                @operator = $"{keyParts[1]}_{keyParts[2]}";
-            }
-        }
-        else if (keyParts.Length == 4)
-        {
-            if (keyParts[0] == "And" || keyParts[0] == "Or")
-            {
-                // Format: And/Or_property_operator1_operator2 ou And/Or_property_operator_N
-                if (int.TryParse(keyParts[3], out _))
-                {
-                    // Format: Or_property_operator_N
-                    property = keyParts[1];
-                    @operator = keyParts[2];
-                }
-                else
-                {
-                    // Format: And/Or_property_operator1_operator2
-                    property = keyParts[1];
-                    @operator = $"{keyParts[2]}_{keyParts[3]}";
-                }
-            }
-            else
-            {
-                // Format: property_operator1_operator2_operator3 (rare)
-                property = keyParts[0];
-                @operator = string.Join("_", keyParts.Skip(1));
-            }
-        }
-        else if (keyParts.Length == 5)
-        {
-            // Format: And/Or_property_operator1_operator2_N
-            property = keyParts[1];
-            @operator = $"{keyParts[2]}_{keyParts[3]}";
-            // keyParts[4] est le suffixe numérique
-        }
-        else
-        {
-            // Format simple: property
-            property = conditionKey;
-            @operator = "eq"; // Par défaut
-        }
-
-        // Obtenir la valeur de la propriété
-        if (!node.Properties.TryGetValue(property, out var actualValue))
-        {
-            Console.WriteLine($"      - Propriété '{property}' non trouvée dans le nœud");
-            // Pour les opérations en lot, on peut vouloir traiter les propriétés manquantes différemment
-            // Par exemple, pour "department is null", on retourne true si la propriété n'existe pas
-            if (@operator == "eq" && expectedValue == null)
-            {
-                return true; // Propriété manquante = null
-            }
-            if (@operator == "ne" && expectedValue != null)
-            {
-                return true; // Propriété manquante ≠ valeur
-            }
-            return false;
-        }
-
-        // Gestion spéciale pour les listes - essayer de récupérer comme List<object>
-        if (@operator == "contains")
-        {
-            // Essayer d'abord de récupérer comme List<object>
-            var listValue = node.GetProperty<List<object>>(property);
-            if (listValue != null)
-            {
-                actualValue = listValue;
-            }
-            else if (actualValue?.ToString()?.Contains("System.Collections.Generic.List") == true)
-            {
-                // Si c'est une liste mais pas récupérée correctement, essayer de la convertir
-                try
-                {
-                    if (actualValue is List<object> list)
-                    {
-                        actualValue = list;
-                    }
-                }
-                catch
-                {
-                    // Ignorer les erreurs de conversion
-                }
-            }
-            
-            // Si c'est toujours une chaîne qui contient "System.Collections.Generic.List", 
-            // c'est probablement une liste sérialisée, essayer de la désérialiser
-            if (actualValue is string strValue && strValue.Contains("System.Collections.Generic.List"))
-            {
-                // Pour l'instant, on va simuler une liste avec les valeurs connues
-                // Dans un vrai système, on aurait une désérialisation propre
-                actualValue = new List<object> { "programming", "design", "management" };
-            }
-            
-            // Debug pour voir ce qu'on a
-            Console.WriteLine($"        DEBUG LIST: actualValue = {actualValue}, type = {actualValue?.GetType()}");
-        }
-
-        // Remplacer les variables dans expectedValue si c'est une chaîne
-        if (expectedValue is string expectedStr && expectedStr.Contains("$"))
-        {
-            expectedValue = _variableManager.ReplaceVariables(expectedStr);
-        }
-
-        Console.WriteLine($"      - Comparaison: {actualValue} {@operator} {expectedValue}");
-
-        // Vérification de sécurité pour les valeurs nulles
-        if (actualValue == null)
-        {
-            return @operator.ToLower() switch
-            {
-                "eq" => expectedValue == null,
-                "ne" => expectedValue != null,
-                _ => false
-            };
-        }
-
-        // Évaluer selon l'opérateur
-        return @operator.ToLower() switch
-        {
-            "eq" => CompareForEquality(actualValue, expectedValue),
-            "ne" => !CompareForEquality(actualValue, expectedValue),
-            "gt" => CompareValues(actualValue, expectedValue) > 0,
-            "lt" => CompareValues(actualValue, expectedValue) < 0,
-            "ge" => CompareValues(actualValue, expectedValue) >= 0,
-            "le" => CompareValues(actualValue, expectedValue) <= 0,
-            "contains" => EvaluateContainsOperator(actualValue, expectedValue),
-            "like" => EvaluateLikeOperator(actualValue, expectedValue),
-            "starts_with" => EvaluateStartsWithOperator(actualValue, expectedValue),
-            "ends_with" => EvaluateEndsWithOperator(actualValue, expectedValue),
-            "upper" => EvaluateUpperOperator(actualValue, expectedValue),
-            "lower" => EvaluateLowerOperator(actualValue, expectedValue),
-            "trim" => EvaluateTrimOperator(actualValue, expectedValue),
-            "length" => EvaluateLengthOperator(actualValue, expectedValue),
-            "substring" => EvaluateSubstringOperator(actualValue, expectedValue),
-            "replace" => EvaluateReplaceOperator(actualValue, expectedValue),
-            _ => false
-        };
-    }
-
-    /// <summary>
-    /// Évalue l'opérateur 'contains' avec gestion sécurisée
-    /// </summary>
-    private bool EvaluateContainsOperator(object actualValue, object expectedValue)
-    {
-        // Si la valeur actuelle est une liste/array
-        if (actualValue is List<object> list)
-        {
-            // Recherche dans la liste avec comparaison insensible à la casse pour les chaînes
-            return list.Any(item => 
-            {
-                if (item is string itemStr && expectedValue is string expectedStr)
-                {
-                    return itemStr.Equals(expectedStr, StringComparison.OrdinalIgnoreCase);
-                }
-                return Equals(item, expectedValue);
-            });
-        }
-        
-        // Si la valeur actuelle est une chaîne, vérifier si elle contient la valeur attendue
-        if (actualValue is string actualStr && expectedValue is string expectedString)
-        {
-            return actualStr.Contains(expectedString, StringComparison.OrdinalIgnoreCase);
-        }
-        
-        // Gestion spéciale pour les listes stockées comme System.Collections.Generic.List`1[System.Object]
-        if (actualValue?.ToString()?.Contains("System.Collections.Generic.List") == true)
-        {
-            // Essayer de convertir en List<object>
-            try
-            {
-                if (actualValue is List<object> listValue)
-                {
-                    return listValue.Any(item => 
-                    {
-                        if (item is string itemStr && expectedValue is string expectedStr)
-                        {
-                            return itemStr.Equals(expectedStr, StringComparison.OrdinalIgnoreCase);
-                        }
-                        return Equals(item, expectedValue);
-                    });
-                }
-            }
-            catch
-            {
-                // Ignorer les erreurs de conversion
-            }
-        }
-
-        // Gestion spéciale pour les listes stockées directement
-        if (actualValue is List<object> directList)
-        {
-            return directList.Any(item => 
-            {
-                if (item is string itemStr && expectedValue is string expectedStr)
-                {
-                    return itemStr.Equals(expectedStr, StringComparison.OrdinalIgnoreCase);
-                }
-                return Equals(item, expectedValue);
-            });
-        }
-        
-        // Pour les autres types, retourner false
-        return false;
-    }
-
-    /// <summary>
-    /// Évalue l'opérateur 'like' pour les patterns de chaînes (avec wildcards % et _)
-    /// </summary>
-    private bool EvaluateLikeOperator(object actualValue, object expectedValue)
-    {
-        if (actualValue is not string actualStr || expectedValue is not string expectedStr)
-            return false;
-
-        // Convertir le pattern LIKE en regex
-        // % = zéro ou plusieurs caractères
-        // _ = exactement un caractère
-        
-        // CORRECTION: D'abord échapper tous les caractères regex sauf % et _
-        var pattern = expectedStr;
-        
-        // Échapper les caractères spéciaux regex sauf % et _
-        pattern = pattern.Replace("\\", "\\\\")  // Échapper les backslashes d'abord
-                        .Replace(".", "\\.")
-                        .Replace("^", "\\^")
-                        .Replace("$", "\\$")
-                        .Replace("+", "\\+")
-                        .Replace("*", "\\*")
-                        .Replace("?", "\\?")
-                        .Replace("{", "\\{")
-                        .Replace("}", "\\}")
-                        .Replace("[", "\\[")
-                        .Replace("]", "\\]")
-                        .Replace("(", "\\(")
-                        .Replace(")", "\\)")
-                        .Replace("|", "\\|");
-        
-        // Maintenant convertir les wildcards LIKE en regex
-        pattern = pattern.Replace("%", ".*")     // % devient .*
-                        .Replace("_", ".");      // _ devient .
-        
-        var regexPattern = "^" + pattern + "$";
-        
-        Console.WriteLine($"        DEBUG LIKE: '{actualStr}' vs pattern '{expectedStr}' -> regex '{regexPattern}'");
-        var result = Regex.IsMatch(actualStr, regexPattern, RegexOptions.IgnoreCase);
-        Console.WriteLine($"        DEBUG LIKE: Résultat = {result}");
-        
-        return result;
-    }
-
-    /// <summary>
-    /// Évalue l'opérateur 'starts_with' pour vérifier le début d'une chaîne
-    /// </summary>
-    private bool EvaluateStartsWithOperator(object actualValue, object expectedValue)
-    {
-        if (actualValue is not string actualStr || expectedValue is not string expectedStr)
-            return false;
-
-        return actualStr.StartsWith(expectedStr, StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
-    /// Évalue l'opérateur 'ends_with' pour vérifier la fin d'une chaîne
-    /// </summary>
-    private bool EvaluateEndsWithOperator(object actualValue, object expectedValue)
-    {
-        if (actualValue is not string actualStr || expectedValue is not string expectedStr)
-            return false;
-
-        return actualStr.EndsWith(expectedStr, StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
-    /// Évalue l'opérateur 'upper' pour comparer avec une chaîne en majuscules
-    /// </summary>
-    private bool EvaluateUpperOperator(object actualValue, object expectedValue)
-    {
-        if (actualValue is not string actualStr || expectedValue is not string expectedStr)
-            return false;
-
-        return actualStr.ToUpperInvariant().Equals(expectedStr.ToUpperInvariant(), StringComparison.Ordinal);
-    }
-
-    /// <summary>
-    /// Évalue l'opérateur 'lower' pour comparer avec une chaîne en minuscules
-    /// </summary>
-    private bool EvaluateLowerOperator(object actualValue, object expectedValue)
-    {
-        if (actualValue is not string actualStr || expectedValue is not string expectedStr)
-            return false;
-
-        return actualStr.ToLowerInvariant().Equals(expectedStr.ToLowerInvariant(), StringComparison.Ordinal);
-    }
-
-    /// <summary>
-    /// Évalue l'opérateur 'trim' pour comparer avec une chaîne sans espaces en début/fin
-    /// </summary>
-    private bool EvaluateTrimOperator(object actualValue, object expectedValue)
-    {
-        if (actualValue is not string actualStr || expectedValue is not string expectedStr)
-            return false;
-
-        // Remplacer les variables dans expectedValue si nécessaire
-        if (expectedStr.StartsWith("$"))
-        {
-            var varName = expectedStr.Substring(1);
-            var varValue = _variableManager.GetVariable(varName);
-            if (varValue != null)
-                expectedStr = varValue.ToString() ?? "";
-        }
-
-        return actualStr.Trim().Equals(expectedStr.Trim(), StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
-    /// Évalue l'opérateur 'length' pour comparer la longueur d'une chaîne
-    /// </summary>
-    private bool EvaluateLengthOperator(object actualValue, object expectedValue)
-    {
-        if (actualValue is not string actualStr)
-            return false;
-
-        // Si la valeur attendue est un nombre, comparer directement
-        if (expectedValue is int expectedLength)
-        {
-            return actualStr.Length == expectedLength;
-        }
-
-        // Si la valeur attendue est une chaîne, essayer de la convertir en nombre
-        if (expectedValue is string expectedStr && int.TryParse(expectedStr, out var length))
-        {
-            return actualStr.Length == length;
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// Évalue l'opérateur 'substring' pour vérifier si une chaîne contient une sous-chaîne
-    /// Syntaxe: substring(start,end) ou substring(start)
-    /// </summary>
-    private bool EvaluateSubstringOperator(object actualValue, object expectedValue)
-    {
-        if (actualValue is not string actualStr || expectedValue is not string expectedStr)
-            return false;
-
-        // Parser la syntaxe substring(start,end) ou substring(start)
-        var match = Regex.Match(expectedStr, @"^substring\((\d+)(?:,(\d+))?\s*\)\s*""(.+)""$");
-        if (!match.Success)
-        {
-            // Essayer une syntaxe alternative sans guillemets
-            match = Regex.Match(expectedStr, @"^substring\((\d+)(?:,(\d+))?\s*\)\s*(.+)$");
-        }
-        if (!match.Success)
-            return false;
-
-        // Remplacer les variables dans les paramètres si nécessaire
-        var startStr = match.Groups[1].Value;
-        var endStr = match.Groups[2].Value;
-        var expectedSubstring = match.Groups[3].Value;
-
-        // Remplacer les variables dans start et end
-        if (startStr.StartsWith("$"))
-        {
-            var varName = startStr.Substring(1);
-            var varValue = _variableManager.GetVariable(varName);
-            if (varValue != null)
-                startStr = varValue.ToString() ?? "";
-        }
-        if (endStr.StartsWith("$"))
-        {
-            var varName = endStr.Substring(1);
-            var varValue = _variableManager.GetVariable(varName);
-            if (varValue != null)
-                endStr = varValue.ToString() ?? "";
-        }
-
-        if (!int.TryParse(startStr, out var start))
-            return false;
-
-        int? end = null;
-        if (!string.IsNullOrEmpty(endStr) && int.TryParse(endStr, out var endValue))
-        {
-            end = endValue;
-        }
-
-        // Extraire la sous-chaîne
-        string substring;
-        if (end.HasValue)
-        {
-            if (start >= actualStr.Length || end.Value <= start || end.Value > actualStr.Length)
-                return false;
-            substring = actualStr.Substring(start, end.Value - start);
-        }
-        else
-        {
-            if (start >= actualStr.Length)
-                return false;
-            substring = actualStr.Substring(start);
-        }
-
-        // Comparer avec la valeur attendue (en tenant compte des variables)
-        if (expectedSubstring.StartsWith("$"))
-        {
-            var varName = expectedSubstring.Substring(1);
-            var varValue = _variableManager.GetVariable(varName);
-            if (varValue != null)
-                expectedSubstring = varValue.ToString() ?? "";
-        }
-
-        // Debug pour voir les valeurs
-        Console.WriteLine($"        DEBUG SUBSTRING: '{substring}' vs '{expectedSubstring}'");
-
-        return substring.Equals(expectedSubstring, StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
-    /// Évalue l'opérateur 'replace' pour vérifier si une chaîne avec remplacement correspond
-    /// Syntaxe: replace(old,new) ou replace(old,new,count)
-    /// </summary>
-    private bool EvaluateReplaceOperator(object actualValue, object expectedValue)
-    {
-        if (actualValue is not string actualStr || expectedValue is not string expectedStr)
-            return false;
-
-        // Parser la syntaxe replace(old,new) ou replace(old,new,count)
-        var match = Regex.Match(expectedStr, @"^replace\(([^,]+),([^,]+)(?:,(\d+))?\s*\)\s*""(.+)""$");
-        if (!match.Success)
-        {
-            // Essayer une syntaxe alternative sans guillemets
-            match = Regex.Match(expectedStr, @"^replace\(([^,]+),([^,]+)(?:,(\d+))?\s*\)\s*(.+)$");
-        }
-        if (!match.Success)
-            return false;
-
-        var oldValue = match.Groups[1].Value.Trim('"', '\'');
-        var newValue = match.Groups[2].Value.Trim('"', '\'');
-        var expectedResult = match.Groups[4].Value;
-
-        // Remplacer les variables dans oldValue et newValue si nécessaire
-        if (oldValue.StartsWith("$"))
-        {
-            var varName = oldValue.Substring(1);
-            var varValue = _variableManager.GetVariable(varName);
-            if (varValue != null)
-                oldValue = varValue.ToString() ?? "";
-        }
-        if (newValue.StartsWith("$"))
-        {
-            var varName = newValue.Substring(1);
-            var varValue = _variableManager.GetVariable(varName);
-            if (varValue != null)
-                newValue = varValue.ToString() ?? "";
-        }
-        
-        int? count = null;
-        if (match.Groups[3].Success && int.TryParse(match.Groups[3].Value, out var countValue))
-        {
-            count = countValue;
-        }
-
-        // Effectuer le remplacement avec vérification de null
-        if (string.IsNullOrEmpty(oldValue))
-            return false;
-
-        string result = actualStr.Replace(oldValue, newValue ?? "");
-        
-        // Si un count est spécifié, limiter le nombre de remplacements
-        if (count.HasValue)
-        {
-            // Pour limiter le nombre de remplacements, nous devons le faire manuellement
-            var occurrences = 0;
-            var index = 0;
-            while (occurrences < count.Value && (index = result.IndexOf(oldValue, index, StringComparison.Ordinal)) != -1)
-            {
-                occurrences++;
-                index += oldValue.Length;
-            }
-            
-            // Si nous avons dépassé le count, nous devons recalculer
-            if (occurrences > count.Value)
-            {
-                var resultBuilder = new System.Text.StringBuilder();
-                var lastIndex = 0;
-                occurrences = 0;
-                index = 0;
-                
-                while (occurrences < count.Value && (index = actualStr.IndexOf(oldValue, index, StringComparison.Ordinal)) != -1)
-                {
-                    resultBuilder.Append(actualStr.Substring(lastIndex, index - lastIndex));
-                    resultBuilder.Append(newValue);
-                    lastIndex = index + oldValue.Length;
-                    index = lastIndex;
-                    occurrences++;
-                }
-                
-                resultBuilder.Append(actualStr.Substring(lastIndex));
-                result = resultBuilder.ToString();
-            }
-        }
-
-        // Comparer avec la valeur attendue (en tenant compte des variables)
-        if (expectedResult.StartsWith("$"))
-        {
-            var varName = expectedResult.Substring(1);
-            var varValue = _variableManager.GetVariable(varName);
-            if (varValue != null)
-                expectedResult = varValue.ToString() ?? "";
-        }
-        
-        // Debug pour voir les valeurs
-        Console.WriteLine($"        DEBUG REPLACE: '{result}' vs '{expectedResult}'");
-        
-        return result.Equals(expectedResult, StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
-    /// Exécute une opération batch avec NodeId en string
-    /// </summary>
-    private async Task<List<BatchOperationResult>> ExecuteBatchCreateAsync(ParsedQuery query)
-    {
-        var results = new List<BatchOperationResult>();
-        var startTime = DateTime.UtcNow;
-        
         try
         {
-            // Remplacer les variables dans la requête avant traitement
-            ReplaceVariablesInParsedQuery(query);
-            
-            // Validation des propriétés requises
-            if (string.IsNullOrEmpty(query.NodeLabel))
+            // Gestion des conditions complexes avec relations
+            if (conditionKey == "connected_to_via")
             {
-                results.Add(new BatchOperationResult
-                {
-                    OperationId = Guid.NewGuid(),
-                    OperationType = "BatchCreate",
-                    Success = false,
-                    Error = "Label de nœud requis pour la création",
-                    ExecutionTime = (DateTime.UtcNow - startTime).TotalMilliseconds
-                });
-                return results;
+                return await EvaluateConnectedToViaConditionAsync(node, expectedValue);
             }
-
-            // Validation des propriétés
-            var validationErrors = ValidateNodeProperties(query.Properties);
-            if (validationErrors.Any())
+            else if (conditionKey == "has_edge")
             {
-                results.Add(new BatchOperationResult
-                {
-                    OperationId = Guid.NewGuid(),
-                    OperationType = "BatchCreate",
-                    Success = false,
-                    Error = $"Propriétés invalides: {string.Join(", ", validationErrors)}",
-                    ExecutionTime = (DateTime.UtcNow - startTime).TotalMilliseconds
-                });
-                return results;
+                return await EvaluateHasEdgeConditionAsync(node, expectedValue);
             }
-
-            // Déterminer le nombre de nœuds à créer
-            int nodeCount = 1; // Par défaut, créer un seul nœud
-            
-            // Pour les opérations en lots, créer plusieurs nœuds par défaut
-            // Chercher des indices dans les propriétés ou conditions
-            if (query.Properties.ContainsKey("count") || query.Properties.ContainsKey("number"))
+            else if (conditionKey == "connected_via")
             {
-                var countValue = query.Properties.ContainsKey("count") ? query.Properties["count"] : query.Properties["number"];
-                if (int.TryParse(countValue.ToString(), out int count) && count > 0)
-                {
-                    nodeCount = count;
-                    // Retirer la propriété count/number des propriétés du nœud
-                    query.Properties.Remove("count");
-                    query.Properties.Remove("number");
-                }
-            }
-            else if (query.Conditions.Any())
-            {
-                // Chercher des conditions qui pourraient indiquer un nombre
-                foreach (var condition in query.Conditions)
-                {
-                    if (condition.Key.Contains("count", StringComparison.OrdinalIgnoreCase) || 
-                        condition.Key.Contains("number", StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (int.TryParse(condition.Value.ToString(), out int count) && count > 0)
-                        {
-                            nodeCount = count;
-                            break;
-                        }
-                    }
-                }
+                return await EvaluateConnectedViaConditionAsync(node, expectedValue);
             }
             
-            // Pour les opérations en lots sans spécification explicite, créer 3 nœuds par défaut
-            if (nodeCount == 1 && query.BatchType == BatchOperationType.Create)
-            {
-                nodeCount = 3; // Créer 3 nœuds par défaut pour les opérations en lots
-            }
-
-            // Créer plusieurs nœuds avec les mêmes propriétés
-            for (int i = 0; i < nodeCount; i++)
-            {
-                var operationId = Guid.NewGuid();
-                var nodeStartTime = DateTime.UtcNow;
-                
-                try
-                {
-                    // Créer une copie des propriétés pour chaque nœud
-                    var nodeProperties = new Dictionary<string, object>(query.Properties);
-                    
-                    // Ajouter un index si nécessaire pour différencier les nœuds
-                    if (nodeCount > 1)
-                    {
-                        nodeProperties["batch_index"] = i + 1;
-                    }
-                    
-                    var node = new Node(query.NodeLabel, nodeProperties);
-                    _storage.AddNode(node);
-                    
-                    var executionTime = (DateTime.UtcNow - nodeStartTime).TotalMilliseconds;
-
-                    results.Add(new BatchOperationResult
-                    {
-                        OperationId = operationId,
-                        OperationType = "BatchCreate",
-                        Success = true,
-                        Message = $"Nœud {i + 1}/{nodeCount} créé avec l'ID: {node.Id}",
-                        Data = new { NodeId = node.Id, Node = node, BatchIndex = i + 1 },
-                        NodeId = node.Id.ToString(),
-                        ExecutionTime = executionTime,
-                        OperationIndex = i
-                    });
-                }
-                catch (Exception ex)
-                {
-                    results.Add(new BatchOperationResult
-                    {
-                        OperationId = operationId,
-                        OperationType = "BatchCreate",
-                        Success = false,
-                        Error = $"Erreur lors de la création du nœud {i + 1}: {ex.Message}",
-                        ExecutionTime = (DateTime.UtcNow - nodeStartTime).TotalMilliseconds,
-                        Exception = ex,
-                        OperationIndex = i
-                    });
-                }
-            }
-
-            return results;
-        }
-        catch (Exception ex)
-        {
-            results.Add(new BatchOperationResult
-            {
-                OperationId = Guid.NewGuid(),
-                OperationType = "BatchCreate",
-                Success = false,
-                Error = $"Erreur critique lors de la création en lot: {ex.Message}",
-                ExecutionTime = (DateTime.UtcNow - startTime).TotalMilliseconds,
-                Exception = ex
-            });
-            return results;
-        }
-    }
-
-    private async Task<List<BatchOperationResult>> ExecuteBatchUpdateAsync(ParsedQuery query)
-    {
-        var results = new List<BatchOperationResult>();
-        var startTime = DateTime.UtcNow;
-        
-        // Remplacer les variables dans la requête avant traitement
-        ReplaceVariablesInParsedQuery(query);
-        
-        if (string.IsNullOrEmpty(query.NodeLabel))
-        {
-            results.Add(new BatchOperationResult
-            {
-                OperationId = Guid.NewGuid(),
-                OperationType = "BatchUpdate",
-                Success = false,
-                Error = "Label de nœud requis pour la mise à jour",
-                ExecutionTime = (DateTime.UtcNow - startTime).TotalMilliseconds
-            });
-            return results;
-        }
-
-        // Validation des propriétés à mettre à jour
-        var validationErrors = ValidateNodeProperties(query.Properties);
-        if (validationErrors.Any())
-        {
-            results.Add(new BatchOperationResult
-            {
-                OperationId = Guid.NewGuid(),
-                OperationType = "BatchUpdate",
-                Success = false,
-                Error = $"Propriétés invalides: {string.Join(", ", validationErrors)}",
-                ExecutionTime = (DateTime.UtcNow - startTime).TotalMilliseconds
-            });
-            return results;
-        }
-
-        var allNodes = _storage.GetAllNodes();
-        var nodesByLabel = allNodes.Where(n => n.Label.Equals(query.NodeLabel, StringComparison.OrdinalIgnoreCase)).ToList();
-        var matchingNodes = FilterNodesByConditions(nodesByLabel, query.Conditions);
-
-        if (!matchingNodes.Any())
-        {
-            results.Add(new BatchOperationResult
-            {
-                OperationId = Guid.NewGuid(),
-                OperationType = "BatchUpdate",
-                Success = true,
-                Message = $"Aucun nœud trouvé pour la mise à jour sur {query.NodeLabel}",
-                Data = new { UpdatedCount = 0 },
-                ExecutionTime = (DateTime.UtcNow - startTime).TotalMilliseconds
-            });
-            return results;
-        }
-
-        // Traitement en parallèle pour de meilleures performances
-        var semaphore = new SemaphoreSlim(Environment.ProcessorCount);
-        var tasks = matchingNodes.Select(async node =>
-        {
-            await semaphore.WaitAsync();
-            var nodeStartTime = DateTime.UtcNow;
-            var operationId = Guid.NewGuid();
+            // Gestion des conditions normales
+            var actualValue = GetNodeValueForCondition(node, conditionKey);
             
-            try
-            {
-                // Conserver les valeurs originales pour audit et rollback
-                var originalProperties = new Dictionary<string, object>(node.Properties);
-                var updatedProperties = new Dictionary<string, object>();
-                
-                // Appliquer les nouvelles propriétés avec validation
-                foreach (var property in query.Properties)
-                {
-                    var oldValue = node.Properties.ContainsKey(property.Key) ? node.Properties[property.Key] : null;
-                    node.Properties[property.Key] = property.Value;
-                    updatedProperties[property.Key] = property.Value;
-                    
-                    // Log des changements pour audit
-                    Console.WriteLine($"Nœud {node.Id}: {property.Key} = {oldValue} -> {property.Value}");
-                }
-
-                var executionTime = (DateTime.UtcNow - nodeStartTime).TotalMilliseconds;
-
-                return new BatchOperationResult
-                {
-                    OperationId = operationId,
-                    OperationType = "BatchUpdate",
-                    Success = true,
-                    Message = $"Nœud {node.Id} mis à jour",
-                    Data = new { 
-                        NodeId = node.Id, 
-                        UpdatedProperties = updatedProperties,
-                        OriginalProperties = originalProperties,
-                        ChangeCount = updatedProperties.Count
-                    },
-                    NodeId = node.Id.ToString(),
-                    ExecutionTime = executionTime
-                };
-            }
-            catch (Exception ex)
-            {
-                return new BatchOperationResult
-                {
-                    OperationId = operationId,
-                    OperationType = "BatchUpdate",
-                    Success = false,
-                    Error = $"Erreur sur le nœud {node.Id}: {ex.Message}",
-                    NodeId = node.Id.ToString(),
-                    ExecutionTime = (DateTime.UtcNow - nodeStartTime).TotalMilliseconds,
-                    Exception = ex
-                };
-            }
-            finally
-            {
-                semaphore.Release();
-            }
-        });
-
-        var taskResults = await Task.WhenAll(tasks);
-        results.AddRange(taskResults);
-
-        return results;
-    }
-
-    private async Task<List<BatchOperationResult>> ExecuteBatchDeleteAsync(ParsedQuery query)
-    {
-        var results = new List<BatchOperationResult>();
-        var startTime = DateTime.UtcNow;
-        
-        // Remplacer les variables dans la requête avant traitement
-        ReplaceVariablesInParsedQuery(query);
-        
-        if (string.IsNullOrEmpty(query.NodeLabel))
-        {
-            results.Add(new BatchOperationResult
-            {
-                OperationId = Guid.NewGuid(),
-                OperationType = "BatchDelete",
-                Success = false,
-                Error = "Label de nœud requis pour la suppression",
-                ExecutionTime = (DateTime.UtcNow - startTime).TotalMilliseconds
-            });
-            return results;
-        }
-
-        var allNodes = _storage.GetAllNodes();
-        var nodesByLabel = allNodes.Where(n => n.Label.Equals(query.NodeLabel, StringComparison.OrdinalIgnoreCase)).ToList();
-        var matchingNodes = FilterNodesByConditions(nodesByLabel, query.Conditions);
-
-        if (!matchingNodes.Any())
-        {
-            results.Add(new BatchOperationResult
-            {
-                OperationId = Guid.NewGuid(),
-                OperationType = "BatchDelete",
-                Success = true,
-                Message = $"Aucun nœud trouvé pour la suppression sur {query.NodeLabel}",
-                Data = new { DeletedCount = 0 },
-                ExecutionTime = (DateTime.UtcNow - startTime).TotalMilliseconds
-            });
-            return results;
-        }
-
-        // Pré-calcul des arêtes à supprimer pour optimiser les performances
-        var allEdges = _storage.GetAllEdges();
-        var nodeIds = new HashSet<Guid>(matchingNodes.Select(n => n.Id));
-        var edgesToDelete = allEdges.Where(e => nodeIds.Contains(e.FromNodeId) || nodeIds.Contains(e.ToNodeId)).ToList();
-
-        // Traitement en parallèle pour de meilleures performances
-        var semaphore = new SemaphoreSlim(Environment.ProcessorCount);
-        var tasks = matchingNodes.Select(async node =>
-        {
-            await semaphore.WaitAsync();
-            var nodeStartTime = DateTime.UtcNow;
-            var operationId = Guid.NewGuid();
-            
-            try
-            {
-                // Supprimer les arêtes associées en premier
-                var associatedEdges = edgesToDelete.Where(e => e.FromNodeId == node.Id || e.ToNodeId == node.Id).ToList();
-                var deletedEdgeIds = new List<Guid>();
-
-                foreach (var edge in associatedEdges)
-                {
-                    if (_storage.RemoveEdge(edge.Id))
-                    {
-                        deletedEdgeIds.Add(edge.Id);
-                    }
-                }
-
-                // Supprimer le nœud
-                var nodeDeleted = _storage.RemoveNode(node.Id);
-                var executionTime = (DateTime.UtcNow - nodeStartTime).TotalMilliseconds;
-
-                if (nodeDeleted)
-                {
-                    return new BatchOperationResult
-                    {
-                        OperationId = operationId,
-                        OperationType = "BatchDelete",
-                        Success = true,
-                        Message = $"Nœud {node.Id} supprimé avec {deletedEdgeIds.Count} arêtes",
-                        Data = new { 
-                            NodeId = node.Id, 
-                            DeletedEdgesCount = deletedEdgeIds.Count,
-                            DeletedEdgeIds = deletedEdgeIds,
-                            DeletedNode = new { 
-                                Id = node.Id, 
-                                Label = node.Label, 
-                                Properties = node.Properties 
-                            }
-                        },
-                        NodeId = node.Id.ToString(),
-                        ExecutionTime = executionTime
-                    };
-                }
-                else
-                {
-                    return new BatchOperationResult
-                    {
-                        OperationId = operationId,
-                        OperationType = "BatchDelete",
-                        Success = false,
-                        Error = $"Impossible de supprimer le nœud {node.Id}",
-                        NodeId = node.Id.ToString(),
-                        ExecutionTime = executionTime
-                    };
-                }
-            }
-            catch (Exception ex)
-            {
-                return new BatchOperationResult
-                {
-                    OperationId = operationId,
-                    OperationType = "BatchDelete",
-                    Success = false,
-                    Error = $"Erreur lors de la suppression du nœud {node.Id}: {ex.Message}",
-                    NodeId = node.Id.ToString(),
-                    ExecutionTime = (DateTime.UtcNow - nodeStartTime).TotalMilliseconds,
-                    Exception = ex
-                };
-            }
-            finally
-            {
-                semaphore.Release();
-            }
-        });
-
-        var taskResults = await Task.WhenAll(tasks);
-        results.AddRange(taskResults);
-
-        return results;
-    }
-
-    /// <summary>
-    /// Gestion améliorée des sous-requêtes avec mise en cache et optimisations
-    /// </summary>
-    private readonly Dictionary<string, QueryResult> _subQueryCache = new();
-
-    private async Task<bool> EvaluateSubQueryConditionAsync(Node node, string conditionKey, ParsedQuery subQuery)
-    {
-        try
-        {
-            // Remplacer les variables dans la sous-requête avant exécution
-            ReplaceVariablesInParsedQuery(subQuery);
-            
-            // Extraire l'opérateur de sous-requête de la clé
-            var keyParts = conditionKey.Split('_');
-            var property = keyParts[0];
-            var subQueryOperator = keyParts.Length > 2 ? keyParts[2] : "in";
-
-            // Créer une clé de cache pour la sous-requête (après remplacement des variables)
-            var cacheKey = GenerateSubQueryCacheKey(subQuery);
-            
-            // Utiliser le cache si disponible
-            QueryResult subQueryResult;
-            if (_subQueryCache.TryGetValue(cacheKey, out var cachedResult))
-            {
-                subQueryResult = cachedResult;
-                Console.WriteLine($"  - Utilisation du cache pour la sous-requête");
-            }
-            else
-            {
-                // Exécuter la sous-requête de manière asynchrone
-                subQueryResult = await ExecuteSubQueryAsync(subQuery);
-                
-                // Mettre en cache si réussie
-                if (subQueryResult.Success)
-                {
-                    _subQueryCache[cacheKey] = subQueryResult;
-                }
-            }
-            
-            if (!subQueryResult.Success)
-            {
-                Console.WriteLine($"  - Sous-requête échouée : {subQueryResult.Error}");
-                return false;
-            }
-
-            // Extraire les valeurs de la sous-requête avec gestion améliorée
-            var subQueryValues = ExtractSubQueryValues(subQueryResult);
-            
-            // Obtenir la valeur de la propriété du nœud
-            var nodeValue = node.GetProperty<object>(property);
-            
-            Console.WriteLine($"  - Évaluation sous-requête : {property} {subQueryOperator} avec {subQueryValues.Count} valeurs");
-            
-            // Évaluer selon l'opérateur avec vérification de null et gestion d'erreurs
-            return subQueryOperator.ToLowerInvariant() switch
-            {
-                "in" => nodeValue != null && EvaluateInOperator(nodeValue, subQueryValues),
-                "notin" => nodeValue == null || !EvaluateInOperator(nodeValue, subQueryValues),
-                "exists" => EvaluateExistsOperator(subQueryValues),
-                "notexists" => !EvaluateExistsOperator(subQueryValues),
-                "contains" => nodeValue != null && EvaluateContainsOperator(nodeValue, subQueryValues),
-                "notcontains" => nodeValue == null || !EvaluateContainsOperator(nodeValue, subQueryValues),
-                "any" => EvaluateAnyOperator(nodeValue, subQueryValues),
-                "all" => EvaluateAllOperator(nodeValue, subQueryValues),
-                "count_gt" => EvaluateCountOperator(subQueryValues, ">", ExtractComparisonValue(conditionKey)),
-                "count_lt" => EvaluateCountOperator(subQueryValues, "<", ExtractComparisonValue(conditionKey)),
-                "count_eq" => EvaluateCountOperator(subQueryValues, "=", ExtractComparisonValue(conditionKey)),
-                "count_gte" => EvaluateCountOperator(subQueryValues, ">=", ExtractComparisonValue(conditionKey)),
-                "count_lte" => EvaluateCountOperator(subQueryValues, "<=", ExtractComparisonValue(conditionKey)),
-                "count_ne" => EvaluateCountOperator(subQueryValues, "!=", ExtractComparisonValue(conditionKey)),
-                _ => nodeValue != null && EvaluateInOperator(nodeValue, subQueryValues) // Par défaut
-            };
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"  - Erreur lors de l'évaluation de la sous-requête : {ex.Message}");
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Génère une clé de cache pour la sous-requête
-    /// </summary>
-    private string GenerateSubQueryCacheKey(ParsedQuery subQuery)
-    {
-        var keyComponents = new List<string>
-        {
-            subQuery.Type.ToString(),
-            subQuery.NodeLabel ?? "",
-            string.Join(",", subQuery.Conditions.Select(kvp => $"{kvp.Key}:{kvp.Value}")),
-            string.Join(",", subQuery.Properties.Select(kvp => $"{kvp.Key}:{kvp.Value}")),
-            subQuery.Limit?.ToString() ?? "",
-            subQuery.Offset?.ToString() ?? ""
-        };
-        
-        return string.Join("|", keyComponents);
-    }
-
-    /// <summary>
-    /// Nettoyage du cache des sous-requêtes
-    /// </summary>
-    public void ClearSubQueryCache()
-    {
-        _subQueryCache.Clear();
-        Console.WriteLine("Cache des sous-requêtes vidé");
-    }
-
-    /// <summary>
-    /// Supprime toutes les variables
-    /// </summary>
-    public void ClearVariables()
-    {
-        _variableManager.ClearVariables();
-    }
-
-    /// <summary>
-    /// Extrait l'ID de nœud du résultat d'une opération
-    /// </summary>
-    private string? ExtractNodeIdFromResult(object? resultData)
-    {
-        if (resultData == null) return null;
-        
-        try
-        {
-            if (resultData is Dictionary<string, object> dict)
-            {
-                if (dict.TryGetValue("NodeId", out var nodeId))
-                {
-                    return nodeId?.ToString();
-                }
-                if (dict.TryGetValue("Node", out var nodeObj) && nodeObj is Node node)
-                {
-                    return node.Id.ToString();
-                }
-            }
-            
-            if (resultData.GetType().GetProperty("NodeId")?.GetValue(resultData) is Guid guid)
-            {
-                return guid.ToString();
-            }
-            
-            if (resultData.GetType().GetProperty("Node")?.GetValue(resultData) is Node extractedNode)
-            {
-                return extractedNode.Id.ToString();
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Erreur lors de l'extraction de NodeId: {ex.Message}");
-        }
-        
-        return null;
-    }
-
-    /// <summary>
-    /// Évalue l'opérateur CONTAINS pour les sous-requêtes avec gestion avancée
-    /// </summary>
-    private bool EvaluateContainsOperator(object nodeValue, List<object> subQueryValues)
-    {
-        if (nodeValue == null || !subQueryValues.Any()) return false;
-        
-        // Si nodeValue est une collection
-        if (nodeValue is IEnumerable<object> nodeCollection)
-        {
-            return subQueryValues.Any(subValue => 
-                nodeCollection.Any(nodeItem => CompareForEquality(nodeItem, subValue)));
-        }
-        
-        // Si nodeValue est une valeur simple
-        return subQueryValues.Any(subValue => CompareForEquality(nodeValue, subValue));
-    }
-
-    /// <summary>
-    /// Gestion améliorée des transactions pour les opérations batch
-    /// </summary>
-    private class BatchTransaction : IDisposable
-    {
-        private readonly GraphStorage _storage;
-        private readonly List<Node> _originalNodes;
-        private readonly List<Edge> _originalEdges;
-        private bool _committed = false;
-        private bool _disposed = false;
-
-        public BatchTransaction(GraphStorage storage)
-        {
-            _storage = storage;
-            _originalNodes = storage.GetAllNodes().ToList();
-            _originalEdges = storage.GetAllEdges().ToList();
-        }
-
-        public void Commit()
-        {
-            _committed = true;
-        }
-
-        public void Rollback()
-        {
-            if (_committed || _disposed) return;
-            
-            try
-            {
-                // Restaurer l'état original (implémentation simplifiée)
-                Console.WriteLine($"Rollback: restauration de {_originalNodes.Count} nœuds et {_originalEdges.Count} arêtes");
-                // Dans une vraie implémentation, on restaurerait complètement l'état
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Erreur lors du rollback: {ex.Message}");
-            }
-        }
-
-        public void Dispose()
-        {
-            if (_disposed) return;
-            
-            if (!_committed)
-            {
-                Rollback();
-            }
-            
-            _disposed = true;
-        }
-    }
-
-    /// <summary>
-    /// Version améliorée et sécurisée de ExecuteBatchOperationAsync
-    /// </summary>
-    private async Task<QueryResult> ExecuteBatchOperationAsync(ParsedQuery query)
-    {
-        using var transaction = new BatchTransaction(_storage);
-        var results = new List<BatchOperationResult>();
-        var operationMetrics = new BatchOperationMetrics();
-        var startTime = DateTime.UtcNow;
-
-        try
-        {
-            // Validation préliminaire robuste
-            var validationResult = ValidateBatchQuery(query);
-            if (!validationResult.IsValid)
-            {
-                return new QueryResult
-                {
-                    Success = false,
-                    Error = $"Validation échouée: {string.Join("; ", validationResult.Errors)}",
-                    Data = new { ValidationErrors = validationResult.Errors }
-                };
-            }
-
-            // Limitation de sécurité pour éviter les opérations trop massives
-            const int maxBatchSize = 10000;
-            var estimatedOperationCount = EstimateBatchOperationCount(query);
-            
-            if (estimatedOperationCount > maxBatchSize)
-            {
-                return new QueryResult
-                {
-                    Success = false,
-                    Error = $"Opération batch trop volumineuse: {estimatedOperationCount} opérations estimées (limite: {maxBatchSize})"
-                };
-            }
-
-            // Exécution des opérations avec gestion d'erreurs améliorée
-            if (query.BatchOperations.Any())
-            {
-                results = await ExecutePredefinedBatchOperationsAsync(query.BatchOperations);
-            }
-            else
-            {
-                results = await ExecuteTypedBatchOperationAsync(query);
-            }
-
-            // Calcul des métriques
-            operationMetrics.TotalOperations = results.Count;
-            operationMetrics.SuccessfulOperations = results.Count(r => r.Success);
-            operationMetrics.FailedOperations = results.Count(r => !r.Success);
-            operationMetrics.TotalExecutionTime = (DateTime.UtcNow - startTime).TotalMilliseconds;
-            operationMetrics.AverageOperationTime = results.Any() ? results.Average(r => r.ExecutionTime) : 0;
-
-            // Gestion des erreurs selon la stratégie - Correction de la comparaison nullable
-            var hasErrors = operationMetrics.FailedOperations > 0;
-            var isAtomic = query.BatchType.HasValue && query.BatchType.Value == Query.BatchOperationType.Atomic;
-            
-            if (hasErrors && isAtomic)
-            {
-                // Rollback automatique pour les opérations atomiques
-                transaction.Rollback();
-                
-                var errors = results.Where(r => !r.Success).Select(r => r.Error ?? "Erreur inconnue").ToList();
-                return new QueryResult
-                {
-                    Success = false,
-                    Error = $"Opération batch atomique échouée - {operationMetrics.FailedOperations} erreur(s) détectée(s)",
-                    Data = new BatchOperationSummary
-                    {
-                        Metrics = operationMetrics,
-                        Errors = errors,
-                        Results = results.Cast<object>().ToList(),
-                        WasRolledBack = true
-                    }
-                };
-            }
-
-            // Validation post-opération pour s'assurer de l'intégrité
-            var integrityCheck = await ValidateDataIntegrity();
-            if (!integrityCheck.IsValid)
-            {
-                transaction.Rollback();
-                return new QueryResult
-                {
-                    Success = false,
-                    Error = $"Échec de validation de l'intégrité: {string.Join("; ", integrityCheck.Errors)}",
-                    Data = new { IntegrityErrors = integrityCheck.Errors }
-                };
-            }
-
-            // Commit de la transaction
-            transaction.Commit();
-
-            var summary = new BatchOperationSummary
-            {
-                Metrics = operationMetrics,
-                Results = results.Cast<object>().ToList(),
-                Errors = results.Where(r => !r.Success).Select(r => r.Error ?? "").ToList(),
-                WasRolledBack = false,
-                TotalProcessed = operationMetrics.TotalOperations,
-                SuccessCount = operationMetrics.SuccessfulOperations,
-                ErrorCount = operationMetrics.FailedOperations,
-                TotalExecutionTime = operationMetrics.TotalExecutionTime
-            };
-
-            var successRate = operationMetrics.TotalOperations > 0 
-                ? (double)operationMetrics.SuccessfulOperations / operationMetrics.TotalOperations * 100 
-                : 0;
-
-            return new QueryResult
-            {
-                Success = !hasErrors || !isAtomic,
-                Message = $"Batch terminé: {operationMetrics.SuccessfulOperations}/{operationMetrics.TotalOperations} succès ({successRate:F1}%) en {operationMetrics.TotalExecutionTime:F0}ms",
-                Data = summary
-            };
-        }
-        catch (Exception ex)
-        {
-            transaction.Rollback();
-            
-            operationMetrics.TotalExecutionTime = (DateTime.UtcNow - startTime).TotalMilliseconds;
-            
-            return new QueryResult
-            {
-                Success = false,
-                Error = $"Erreur critique dans l'opération batch: {ex.Message}",
-                Data = new BatchOperationSummary
-                {
-                    Metrics = operationMetrics,
-                    Results = results.Cast<object>().ToList(),
-                    Errors = new List<string> { ex.Message },
-                    WasRolledBack = true,
-                    TotalExecutionTime = operationMetrics.TotalExecutionTime
-                }
-            };
-        }
-    }
-
-    /// <summary>
-    /// Estime le nombre d'opérations qui seront effectuées
-    /// </summary>
-    private int EstimateBatchOperationCount(ParsedQuery query)
-    {
-        if (query.BatchOperations.Any())
-        {
-            return query.BatchOperations.Count;
-        }
-
-        if (string.IsNullOrEmpty(query.NodeLabel))
-        {
-            return 1; // Opération simple
-        }
-
-        var nodesByLabel = _storage.GetAllNodes()
-            .Where(n => n.Label.Equals(query.NodeLabel, StringComparison.OrdinalIgnoreCase))
-            .ToList();
-
-        if (query.Conditions.Any())
-        {
-            // Estimation approximative après filtrage
-            return Math.Min(nodesByLabel.Count, nodesByLabel.Count / 2);
-        }
-
-        return nodesByLabel.Count;
-    }
-
-    /// <summary>
-    /// Validation de l'intégrité des données après opérations batch
-    /// </summary>
-    private async Task<ValidationResult> ValidateDataIntegrity()
-    {
-        var errors = new List<string>();
-        
-        try
-        {
-            var allNodes = _storage.GetAllNodes();
-            var allEdges = _storage.GetAllEdges();
-            
-            // Vérifier les références des arêtes
-            var nodeIds = new HashSet<Guid>(allNodes.Select(n => n.Id));
-            var orphanedEdges = allEdges.Where(e => 
-                !nodeIds.Contains(e.FromNodeId) || !nodeIds.Contains(e.ToNodeId)
-            ).ToList();
-            
-            if (orphanedEdges.Any())
-            {
-                errors.Add($"{orphanedEdges.Count} arête(s) orpheline(s) détectée(s)");
-            }
-            
-            // Vérifier l'unicité des IDs
-            var duplicateNodeIds = allNodes.GroupBy(n => n.Id)
-                .Where(g => g.Count() > 1)
-                .Select(g => g.Key)
-                .ToList();
-            
-            if (duplicateNodeIds.Any())
-            {
-                errors.Add($"{duplicateNodeIds.Count} ID(s) de nœud dupliqué(s)");
-            }
-            
-            var duplicateEdgeIds = allEdges.GroupBy(e => e.Id)
-                .Where(g => g.Count() > 1)
-                .Select(g => g.Key)
-                .ToList();
-            
-            if (duplicateEdgeIds.Any())
-            {
-                errors.Add($"{duplicateEdgeIds.Count} ID(s) d'arête dupliqué(s)");
-            }
-        }
-        catch (Exception ex)
-        {
-            errors.Add($"Erreur lors de la validation d'intégrité: {ex.Message}");
-        }
-        
-        return new ValidationResult
-        {
-            IsValid = !errors.Any(),
-            Errors = errors
-        };
-    }
-
-    /// <summary>
-    /// Validation des propriétés de nœud
-    /// </summary>
-    private List<string> ValidateNodeProperties(Dictionary<string, object> properties)
-    {
-        var errors = new List<string>();
-        
-        foreach (var kvp in properties)
-        {
-            if (string.IsNullOrWhiteSpace(kvp.Key))
-            {
-                errors.Add("Nom de propriété vide");
-                continue;
-            }
-            
-            if (kvp.Key.Length > 100)
-            {
-                errors.Add($"Nom de propriété trop long: {kvp.Key}");
-            }
-            
-            if (kvp.Value is string strValue && strValue.Length > 10000)
-            {
-                errors.Add($"Valeur de propriété trop longue pour {kvp.Key}");
-            }
-        }
-        
-        return errors;
-    }
-
-    /// <summary>
-    /// Validation améliorée des requêtes batch
-    /// </summary>
-    private ValidationResult ValidateBatchQuery(ParsedQuery query)
-    {
-        var errors = new List<string>();
-
-        if (query.BatchType == null)
-        {
-            errors.Add("Type d'opération batch non spécifié");
-        }
-
-        if (string.IsNullOrEmpty(query.NodeLabel) && !query.BatchOperations.Any())
-        {
-            errors.Add("Label de nœud ou opérations batch prédéfinies requis");
-        }
-
-        if (query.BatchType.HasValue && query.BatchType.Value == BatchOperationType.Update && !query.Properties.Any())
-        {
-            errors.Add("Propriétés à mettre à jour requises pour les opérations de mise à jour");
-        }
-
-        return new ValidationResult
-        {
-            IsValid = !errors.Any(),
-            Errors = errors
-        };
-    }
-
-    private async Task<List<BatchOperationResult>> ExecutePredefinedBatchOperationsAsync(List<ParsedQuery> batchOperations)
-    {
-        var results = new List<BatchOperationResult>();
-        var semaphore = new SemaphoreSlim(Environment.ProcessorCount); // Limite la concurrence
-
-        var tasks = batchOperations.Select(async (batchQuery, index) =>
-        {
-            await semaphore.WaitAsync();
-            try
-            {
-                var startTime = DateTime.UtcNow;
-                var result = await ExecuteParsedQueryAsync(batchQuery);
-                var executionTime = (DateTime.UtcNow - startTime).TotalMilliseconds;
-
-                return new BatchOperationResult
-                {
-                    OperationType = batchQuery.Type.ToString(),
-                    Success = result.Success,
-                    Message = result.Message,
-                    Error = result.Error,
-                    Data = result.Data,
-                    NodeId = ExtractNodeIdFromResult(result.Data),
-                    ExecutionTime = executionTime,
-                    OperationIndex = index
-                };
-            }
-            catch (Exception ex)
-            {
-                return new BatchOperationResult
-                {
-                    OperationType = batchQuery.Type.ToString(),
-                    Success = false,
-                    Error = $"Exception: {ex.Message}",
-                    OperationIndex = index,
-                    Exception = ex
-                };
-            }
-            finally
-            {
-                semaphore.Release();
-            }
-        });
-
-        var taskResults = await Task.WhenAll(tasks);
-        return taskResults.OrderBy(r => r.OperationIndex).ToList();
-    }
-
-    private async Task<List<BatchOperationResult>> ExecuteTypedBatchOperationAsync(ParsedQuery query)
-    {
-        var results = new List<BatchOperationResult>();
-
-        switch (query.BatchType)
-        {
-            case BatchOperationType.Create:
-                results.AddRange(await ExecuteBatchCreateAsync(query));
-                break;
-
-            case BatchOperationType.Update:
-                results.AddRange(await ExecuteBatchUpdateAsync(query));
-                break;
-
-            case BatchOperationType.Delete:
-                results.AddRange(await ExecuteBatchDeleteAsync(query));
-                break;
-
-            case BatchOperationType.Upsert:
-                results.AddRange(await ExecuteBatchUpsertAsync(query));
-                break;
-
-            case BatchOperationType.Mixed:
-                // Pour les opérations mixtes, exécuter selon le type de requête principal
-                if (query.Type == QueryType.UpdateNode)
-                {
-                    results.AddRange(await ExecuteBatchUpdateAsync(query));
-                }
-                else if (query.Type == QueryType.DeleteNode)
-                {
-                    results.AddRange(await ExecuteBatchDeleteAsync(query));
-                }
-                else if (query.Type == QueryType.CreateNode)
-                {
-                    results.AddRange(await ExecuteBatchCreateAsync(query));
-                }
-                else
-                {
-                    // Par défaut, traiter comme une mise à jour
-                    results.AddRange(await ExecuteBatchUpdateAsync(query));
-                }
-                break;
-
-            case BatchOperationType.Atomic:
-                // Les opérations atomiques sont gérées au niveau supérieur
-                results.AddRange(await ExecuteBatchUpdateAsync(query));
-                break;
-
-            case BatchOperationType.Parallel:
-                // Les opérations parallèles sont gérées au niveau supérieur
-                results.AddRange(await ExecuteBatchUpdateAsync(query));
-                break;
-
-            default:
-                throw new NotSupportedException($"Type d'opération batch non supporté: {query.BatchType}");
-        }
-
-        return results;
-    }
-
-    private async Task<List<BatchOperationResult>> ExecuteBatchUpsertAsync(ParsedQuery query)
-    {
-        var results = new List<BatchOperationResult>();
-        
-        // Remplacer les variables dans la requête avant traitement
-        ReplaceVariablesInParsedQuery(query);
-        
-        if (string.IsNullOrEmpty(query.NodeLabel))
-        {
-            results.Add(new BatchOperationResult
-            {
-                OperationType = "BatchUpsert",
-                Success = false,
-                Error = "Label de nœud requis pour l'upsert"
-            });
-            return results;
-        }
-
-        var startTime = DateTime.UtcNow;
-        var allNodes = _storage.GetAllNodes();
-        var nodesByLabel = allNodes.Where(n => n.Label.Equals(query.NodeLabel, StringComparison.OrdinalIgnoreCase)).ToList();
-        var matchingNodes = FilterNodesByConditions(nodesByLabel, query.Conditions);
-
-        if (matchingNodes.Any())
-        {
-            // Mise à jour des nœuds existants
-            foreach (var node in matchingNodes)
-            {
-                var operationId = Guid.NewGuid();
-                try
-                {
-                    var originalProperties = new Dictionary<string, object>(node.Properties);
-                    
-                    foreach (var property in query.Properties)
-                    {
-                        node.Properties[property.Key] = property.Value;
-                    }
-
-                    results.Add(new BatchOperationResult
-                    {
-                        OperationId = operationId,
-                        OperationType = "BatchUpsert (Update)",
-                        Success = true,
-                        Message = $"Nœud {node.Id} mis à jour",
-                        Data = new { NodeId = node.Id, UpdatedProperties = query.Properties, OriginalProperties = originalProperties },
-                        NodeId = node.Id.ToString()
-                    });
-                }
-                catch (Exception ex)
-                {
-                    results.Add(new BatchOperationResult
-                    {
-                        OperationId = operationId,
-                        OperationType = "BatchUpsert (Update)",
-                        Success = false,
-                        Error = $"Erreur lors de la mise à jour du nœud {node.Id}: {ex.Message}",
-                        NodeId = node.Id.ToString(),
-                        Exception = ex
-                    });
-                }
-            }
-        }
-        else
-        {
-            // Création d'un nouveau nœud
-            var operationId = Guid.NewGuid();
-            try
-            {
-                // Validation des propriétés
-                var validationErrors = ValidateNodeProperties(query.Properties);
-                if (validationErrors.Any())
-                {
-                    results.Add(new BatchOperationResult
-                    {
-                        OperationId = operationId,
-                        OperationType = "BatchUpsert (Create)",
-                        Success = false,
-                        Error = $"Propriétés invalides: {string.Join(", ", validationErrors)}"
-                    });
-                    return results;
-                }
-
-                var newNode = new Node(query.NodeLabel, query.Properties);
-                _storage.AddNode(newNode);
-
-                results.Add(new BatchOperationResult
-                {
-                    OperationId = operationId,
-                    OperationType = "BatchUpsert (Create)",
-                    Success = true,
-                    Message = $"Nouveau nœud créé avec l'ID: {newNode.Id}",
-                    Data = new { NodeId = newNode.Id, Node = newNode },
-                    NodeId = newNode.Id.ToString()
-                });
-            }
-            catch (Exception ex)
-            {
-                results.Add(new BatchOperationResult
-                {
-                    OperationId = operationId,
-                    OperationType = "BatchUpsert (Create)",
-                    Success = false,
-                    Error = $"Erreur lors de la création: {ex.Message}",
-                    Exception = ex
-                });
-            }
-        }
-
-        var executionTime = (DateTime.UtcNow - startTime).TotalMilliseconds;
-        results.ForEach(r => r.ExecutionTime = executionTime / results.Count);
-
-        return results;
-    }
-
-    /// <summary>
-    /// Amélioration de ExecuteAggregateAsync avec gestion des nulls
-    /// </summary>
-    private Task<QueryResult> ExecuteAggregateAsync(ParsedQuery query)
-    {
-        // Remplacer les variables dans la requête avant traitement
-        ReplaceVariablesInParsedQuery(query);
-        
-        if (query.AggregateFunction == null || string.IsNullOrEmpty(query.AggregateProperty))
-        {
-            return Task.FromResult(new QueryResult
-            {
-                Success = false,
-                Error = "Fonction d'agrégation ou propriété manquante"
-            });
-        }
-
-        var nodes = _storage.GetNodesByLabel(query.NodeLabel!);
-
-        // Appliquer les conditions WHERE si présentes
-        if (query.Conditions.Any())
-        {
-            nodes = FilterNodesByConditions(nodes, query.Conditions);
-        }
-
-        // Extraire les valeurs numériques de la propriété spécifiée
-        var numericValues = new List<double>();
-        var missingPropertyCount = 0;
-        var nonNumericCount = 0;
-        
-        foreach (var node in nodes)
-        {
-            if (node.Properties.TryGetValue(query.AggregateProperty, out var value))
-            {
-                if (TryConvertToDouble(value, out double numericValue))
-                {
-                    numericValues.Add(numericValue);
-                }
-                else
-                {
-                    nonNumericCount++;
-                }
-            }
-            else
-            {
-                missingPropertyCount++;
-            }
-        }
-
-        // Gestion intelligente des cas vides ou non numériques
-        bool isEmpty = !numericValues.Any();
-        object? result = null;
-        string functionName = query.AggregateFunction.ToString().ToLowerInvariant();
-        string message;
-        
-        if (isEmpty)
-        {
-            switch (query.AggregateFunction)
-            {
-                case AggregateFunction.Sum:
-                case AggregateFunction.Count:
-                    result = 0;
-                    break;
-                case AggregateFunction.Avg:
-                case AggregateFunction.Min:
-                case AggregateFunction.Max:
-                    result = null;
-                    break;
-                default:
-                    result = null;
-                    break;
-            }
-            
-            // Message détaillé pour le debug
-            var details = new List<string>();
-            if (missingPropertyCount > 0) details.Add($"{missingPropertyCount} nœud(s) sans propriété '{query.AggregateProperty}'");
-            if (nonNumericCount > 0) details.Add($"{nonNumericCount} nœud(s) avec valeur non numérique");
-            if (nodes.Count == 0) details.Add("Aucun nœud trouvé");
-            
-            var detailMessage = details.Any() ? $" ({string.Join(", ", details)})" : "";
-            message = $"Aucune valeur numérique trouvée pour la propriété '{query.AggregateProperty}' sur les nœuds de type '{query.NodeLabel}'{detailMessage}";
-        }
-        else
-        {
-            result = query.AggregateFunction switch
-            {
-                AggregateFunction.Sum => numericValues.Sum(),
-                AggregateFunction.Avg => numericValues.Average(),
-                AggregateFunction.Min => numericValues.Min(),
-                AggregateFunction.Max => numericValues.Max(),
-                AggregateFunction.Count => numericValues.Count,
-                _ => throw new NotSupportedException($"Fonction d'agrégation non supportée : {query.AggregateFunction}")
-            };
-            
-            var detailMessage = "";
-            if (missingPropertyCount > 0 || nonNumericCount > 0)
-            {
-                var details = new List<string>();
-                if (missingPropertyCount > 0) details.Add($"{missingPropertyCount} sans propriété");
-                if (nonNumericCount > 0) details.Add($"{nonNumericCount} non numériques");
-                detailMessage = $" (ignoré: {string.Join(", ", details)})";
-            }
-            
-            message = $"{functionName.ToUpperInvariant()}({query.AggregateProperty}) sur {numericValues.Count} nœud(s) de type '{query.NodeLabel}' = {result}{detailMessage}";
-        }
-
-        return Task.FromResult(new QueryResult
-        {
-            Success = true,
-            Message = message,
-            Data = new
-            {
-                Function = functionName,
-                Property = query.AggregateProperty,
-                Label = query.NodeLabel,
-                Count = numericValues.Count,
-                TotalNodes = nodes.Count,
-                MissingPropertyCount = missingPropertyCount,
-                NonNumericCount = nonNumericCount,
-                Result = result,
-                IsEmptyAggregation = isEmpty,
-                Values = numericValues.Take(10).ToList() // Afficher les 10 premières valeurs pour debug
-            }
-        });
-    }
-
-    /// <summary>
-    /// Tente de convertir une valeur en double pour les calculs d'agrégation avec gestion des nulls
-    /// </summary>
-    private bool TryConvertToDouble(object? value, out double result)
-    {
-        result = 0;
-
-        if (value == null) return false;
-
-        // Types numériques directs
-        if (value is double d)
-        {
-            result = d;
-            return true;
-        }
-        
-        if (value is float f)
-        {
-            result = f;
-            return true;
-        }
-        
-        if (value is int i)
-        {
-            result = i;
-            return true;
-        }
-        
-        if (value is long l)
-        {
-            result = l;
-            return true;
-        }
-        
-        if (value is decimal dec)
-        {
-            result = (double)dec;
-            return true;
-        }
-
-        // Tentative de conversion depuis une chaîne
-        if (value is string str)
-        {
-            return double.TryParse(str, out result);
-        }
-
-        // Tentative de conversion générique
-        try
-        {
-            result = Convert.ToDouble(value);
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Filtre les arêtes selon les conditions spécifiées avec gestion des nulls
-    /// </summary>
-    private List<Edge> FilterEdgesByConditions(List<Edge> edges, Dictionary<string, object> conditions)
-    {
-        return edges.Where(edge =>
-        {
-            // Séparer les conditions AND et OR
-            var andConditions = new List<KeyValuePair<string, object>>();
-            var orConditions = new List<KeyValuePair<string, object>>();
-
-            foreach (var condition in conditions)
-            {
-                if (condition.Key.StartsWith("Or_"))
-                {
-                    orConditions.Add(condition);
-                }
-                else
-                {
-                    andConditions.Add(condition);
-                }
-            }
-
-            bool andResult = true;
-            if (andConditions.Any())
-            {
-                andResult = andConditions.All(condition => EvaluateEdgeCondition(edge, condition.Key, condition.Value));
-            }
-
-            bool orResult = false;
-            if (orConditions.Any())
-            {
-                orResult = orConditions.Any(condition => EvaluateEdgeCondition(edge, condition.Key, condition.Value));
-            }
-
-            // Logique finale similaire aux nœuds
-            if (andConditions.Any() && orConditions.Any())
-            {
-                return andResult && orResult;
-            }
-            else if (andConditions.Any())
-            {
-                return andResult;
-            }
-            else if (orConditions.Any())
-            {
-                return orResult;
-            }
-            else
-            {
+            if (actualValue == null && expectedValue == null)
                 return true;
+            
+            if (actualValue == null || expectedValue == null)
+                return false;
+            
+            // Si la valeur attendue est une sous-requête
+            if (expectedValue is ParsedQuery subQuery)
+            {
+                return await EvaluateSubQueryConditionAsync(node, conditionKey, subQuery);
             }
-        }).ToList();
+            
+            // Comparaison directe
+            return CompareForEquality(actualValue, expectedValue);
+        }
+        catch (Exception ex)
+        {
+            // En cas d'erreur, retourner false pour éviter les faux positifs
+            return false;
+        }
+    }
+    
+    /// <summary>
+    /// Évalue une condition "connected to via"
+    /// </summary>
+    private async Task<bool> EvaluateConnectedToViaConditionAsync(Node node, object expectedValue)
+    {
+        try
+        {
+            if (expectedValue is string edgeTypeStr)
+            {
+                // Format simple : "connected to via [edge_type]"
+                var edges = _storage.GetEdgesForNode(node.Id);
+                return edges.Any(e => e.RelationType.Equals(edgeTypeStr, StringComparison.OrdinalIgnoreCase));
+            }
+            else if (expectedValue is Dictionary<string, object> dictValue)
+            {
+                // Format avec label et edge type
+                var targetLabel = dictValue.GetValueOrDefault("Label")?.ToString();
+                var edgeType = dictValue.GetValueOrDefault("EdgeType")?.ToString();
+                
+                if (!string.IsNullOrEmpty(targetLabel) && !string.IsNullOrEmpty(edgeType))
+                {
+                    var edges = _storage.GetEdgesForNode(node.Id);
+                    var connectedNodes = new List<Node>();
+                    
+                    foreach (var edge in edges)
+                    {
+                        if (edge.RelationType.Equals(edgeType, StringComparison.OrdinalIgnoreCase))
+                        {
+                            var otherNodeId = edge.GetOtherNode(node.Id);
+                            var otherNode = _storage.GetNode(otherNodeId);
+                            if (otherNode != null && otherNode.Label.Equals(targetLabel, StringComparison.OrdinalIgnoreCase))
+                            {
+                                connectedNodes.Add(otherNode);
+                            }
+                        }
+                    }
+                    
+                    return connectedNodes.Any();
+                }
+            }
+            else if (expectedValue is ParsedQuery subQuery)
+            {
+                // Format avec sous-requête
+                var edges = _storage.GetEdgesForNode(node.Id);
+                var connectedNodes = new List<Node>();
+                
+                foreach (var edge in edges)
+                {
+                    if (edge.RelationType.Equals(subQuery.EdgeType, StringComparison.OrdinalIgnoreCase))
+                    {
+                        var otherNodeId = edge.GetOtherNode(node.Id);
+                        var otherNode = _storage.GetNode(otherNodeId);
+                        if (otherNode != null)
+                        {
+                            // Appliquer les conditions de la sous-requête
+                            if (subQuery.Conditions.Any())
+                            {
+                                var filteredNodes = await FilterNodesByConditionsAsync(new List<Node> { otherNode }, subQuery.Conditions);
+                                if (filteredNodes.Any())
+                                {
+                                    connectedNodes.Add(otherNode);
+                                }
+                            }
+                            else
+                            {
+                                connectedNodes.Add(otherNode);
+                            }
+                        }
+                    }
+                }
+                
+                return connectedNodes.Any();
+            }
+            
+            return false;
+        }
+        catch (Exception ex)
+        {
+            return false;
+        }
+    }
+    
+    /// <summary>
+    /// Évalue une condition "has edge"
+    /// </summary>
+    private async Task<bool> EvaluateHasEdgeConditionAsync(Node node, object expectedValue)
+    {
+        try
+        {
+            if (expectedValue is Dictionary<string, object> dictValue)
+            {
+                var edgeType = dictValue.GetValueOrDefault("EdgeType")?.ToString();
+                var targetLabel = dictValue.GetValueOrDefault("TargetLabel")?.ToString();
+                
+                if (!string.IsNullOrEmpty(edgeType) && !string.IsNullOrEmpty(targetLabel))
+                {
+                    var edges = _storage.GetEdgesForNode(node.Id);
+                    
+                    foreach (var edge in edges)
+                    {
+                        if (edge.RelationType.Equals(edgeType, StringComparison.OrdinalIgnoreCase))
+                        {
+                            var otherNodeId = edge.GetOtherNode(node.Id);
+                            var otherNode = _storage.GetNode(otherNodeId);
+                            if (otherNode != null && otherNode.Label.Equals(targetLabel, StringComparison.OrdinalIgnoreCase))
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            else if (expectedValue is ParsedQuery subQuery)
+            {
+                // Format avec sous-requête
+                var edges = _storage.GetEdgesForNode(node.Id);
+                
+                foreach (var edge in edges)
+                {
+                    if (edge.RelationType.Equals(subQuery.EdgeType, StringComparison.OrdinalIgnoreCase))
+                    {
+                        var otherNodeId = edge.GetOtherNode(node.Id);
+                        var otherNode = _storage.GetNode(otherNodeId);
+                        if (otherNode != null)
+                        {
+                            // Appliquer les conditions de la sous-requête
+                            if (subQuery.Conditions.Any())
+                            {
+                                var filteredNodes = await FilterNodesByConditionsAsync(new List<Node> { otherNode }, subQuery.Conditions);
+                                if (filteredNodes.Any())
+                                {
+                                    return true;
+                                }
+                            }
+                            else
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            return false;
+        }
+        catch (Exception ex)
+        {
+            return false;
+        }
+    }
+    
+    /// <summary>
+    /// Évalue une condition "connected via"
+    /// </summary>
+    private async Task<bool> EvaluateConnectedViaConditionAsync(Node node, object expectedValue)
+    {
+        try
+        {
+            if (expectedValue is string edgeType)
+            {
+                // Format simple : "connected via [edge_type]"
+                var edges = _storage.GetEdgesForNode(node.Id);
+                return edges.Any(e => e.RelationType.Equals(edgeType, StringComparison.OrdinalIgnoreCase));
+            }
+            else if (expectedValue is ParsedQuery subQuery)
+            {
+                // Format avec sous-requête
+                var edges = _storage.GetEdgesForNode(node.Id);
+                var connectedNodes = new List<Node>();
+                
+                foreach (var edge in edges)
+                {
+                    if (edge.RelationType.Equals(subQuery.EdgeType, StringComparison.OrdinalIgnoreCase))
+                    {
+                        var otherNodeId = edge.GetOtherNode(node.Id);
+                        var otherNode = _storage.GetNode(otherNodeId);
+                        if (otherNode != null)
+                        {
+                            // Appliquer les conditions de la sous-requête
+                            if (subQuery.Conditions.Any())
+                            {
+                                var filteredNodes = await FilterNodesByConditionsAsync(new List<Node> { otherNode }, subQuery.Conditions);
+                                if (filteredNodes.Any())
+                                {
+                                    connectedNodes.Add(otherNode);
+                                }
+                            }
+                            else
+                            {
+                                connectedNodes.Add(otherNode);
+                            }
+                        }
+                    }
+                }
+                
+                return connectedNodes.Any();
+            }
+            
+            return false;
+        }
+        catch (Exception ex)
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -2822,6 +1429,11 @@ public class GraphQLiteEngine : IDisposable
         return _variableManager.GetAllVariables();
     }
 
+    public void ClearVariables()
+    {
+        _variableManager.ClearVariables();
+    }
+
     private bool IsModifyingOperation(QueryType type)
     {
         return type is QueryType.CreateNode or QueryType.CreateEdge or 
@@ -2874,6 +1486,72 @@ public class GraphQLiteEngine : IDisposable
     }
 
     /// <summary>
+    /// Trouve un chemin avancé avec support des types d'arêtes, évitement et bidirectionnalité
+    /// </summary>
+    private List<Node> FindAdvancedPath(Guid fromId, Guid toId, string? viaEdgeType, string? avoidEdgeType, int maxSteps, bool isBidirectional)
+    {
+        if (fromId == toId)
+        {
+            var singleNode = _storage.GetNode(fromId);
+            return singleNode != null ? new List<Node> { singleNode } : new List<Node>();
+        }
+
+        var visited = new HashSet<Guid>();
+        var queue = new Queue<(Guid nodeId, List<Guid> path, int steps)>();
+        queue.Enqueue((fromId, new List<Guid> { fromId }, 0));
+
+        while (queue.Count > 0)
+        {
+            var (currentId, path, steps) = queue.Dequeue();
+
+            if (visited.Contains(currentId) || steps >= maxSteps)
+                continue;
+
+            visited.Add(currentId);
+
+            if (currentId == toId)
+            {
+                return path.Select(id => _storage.GetNode(id))
+                          .Where(n => n != null)
+                          .ToList()!;
+            }
+
+            var edges = _storage.GetEdgesForNode(currentId);
+            foreach (var edge in edges)
+            {
+                // Vérifier le type d'arête à éviter
+                if (!string.IsNullOrEmpty(avoidEdgeType) && 
+                    edge.RelationType.Equals(avoidEdgeType, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                // Vérifier le type d'arête spécifique à utiliser
+                if (!string.IsNullOrEmpty(viaEdgeType) && 
+                    !edge.RelationType.Equals(viaEdgeType, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var nextId = edge.GetOtherNode(currentId);
+                if (!visited.Contains(nextId))
+                {
+                    var newPath = new List<Guid>(path) { nextId };
+                    queue.Enqueue((nextId, newPath, steps + 1));
+                }
+            }
+        }
+
+        // Si bidirectionnel et pas de chemin trouvé, essayer dans l'autre sens
+        if (isBidirectional)
+        {
+            return FindAdvancedPath(toId, fromId, viaEdgeType, avoidEdgeType, maxSteps, false);
+        }
+
+        return new List<Node>();
+    }
+
+    /// <summary>
     /// Trouve tous les nœuds d'un label donné dans un nombre limité d'étapes depuis un nœud source
     /// </summary>
     private List<Node> FindNodesWithinSteps(Guid fromId, string targetLabel, int maxSteps)
@@ -2906,6 +1584,65 @@ public class GraphQLiteEngine : IDisposable
                 var edges = _storage.GetEdgesForNode(currentId);
                 foreach (var edge in edges)
                 {
+                    var nextId = edge.GetOtherNode(currentId);
+                    if (!visited.Contains(nextId))
+                    {
+                        queue.Enqueue((nextId, currentStep + 1));
+                    }
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Trouve tous les nœuds d'un label donné dans un nombre limité d'étapes avec support des types d'arêtes
+    /// </summary>
+    private List<Node> FindNodesWithinStepsAdvanced(Guid fromId, string targetLabel, int maxSteps, string? viaEdgeType, string? avoidEdgeType)
+    {
+        var result = new List<Node>();
+        var visited = new HashSet<Guid>();
+        var queue = new Queue<(Guid nodeId, int currentStep)>();
+        
+        queue.Enqueue((fromId, 0));
+
+        while (queue.Count > 0)
+        {
+            var (currentId, currentStep) = queue.Dequeue();
+
+            if (visited.Contains(currentId) || currentStep > maxSteps)
+                continue;
+
+            visited.Add(currentId);
+
+            var currentNode = _storage.GetNode(currentId);
+            if (currentNode != null && currentStep > 0 && // Exclure le nœud de départ
+                currentNode.Label.Equals(targetLabel, StringComparison.OrdinalIgnoreCase))
+            {
+                result.Add(currentNode);
+            }
+
+            // Continuer la recherche si nous n'avons pas atteint la limite d'étapes
+            if (currentStep < maxSteps)
+            {
+                var edges = _storage.GetEdgesForNode(currentId);
+                foreach (var edge in edges)
+                {
+                    // Vérifier le type d'arête à éviter
+                    if (!string.IsNullOrEmpty(avoidEdgeType) && 
+                        edge.RelationType.Equals(avoidEdgeType, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    // Vérifier le type d'arête spécifique à utiliser
+                    if (!string.IsNullOrEmpty(viaEdgeType) && 
+                        !edge.RelationType.Equals(viaEdgeType, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
                     var nextId = edge.GetOtherNode(currentId);
                     if (!visited.Contains(nextId))
                     {
@@ -3022,22 +1759,24 @@ public class GraphQLiteEngine : IDisposable
     {
         try
         {
-            Console.WriteLine($"  - Exécution de la sous-requête : {subQuery.Type} {subQuery.NodeLabel}");
+            // Exécuter la sous-requête selon son type
+            QueryResult result;
             
-            // Exécuter la sous-requête
-            var result = await ExecuteParsedQueryAsync(subQuery);
-            
-            Console.WriteLine($"  - Résultat de la sous-requête : {result.Success}, {result.Message}");
-            if (result.Data is List<Node> nodes)
+            if (subQuery.Type == QueryType.Aggregate)
             {
-                Console.WriteLine($"  - Nombre de nœuds trouvés : {nodes.Count}");
+                // Pour les agrégations, utiliser la méthode d'agrégation
+                result = await ExecuteAggregateAsync(subQuery);
+            }
+            else
+            {
+                // Pour les autres types, utiliser la méthode générique
+                result = await ExecuteParsedQueryAsync(subQuery);
             }
             
             return result;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"  - Erreur dans la sous-requête : {ex.Message}");
             return new QueryResult
             {
                 Success = false,
@@ -3053,44 +1792,80 @@ public class GraphQLiteEngine : IDisposable
     {
         var values = new List<object>();
         
-        if (subQueryResult.Data is List<Node> nodes)
+        // Vérifier d'abord si c'est une agrégation (données numériques)
+        if (subQueryResult.Data is double numericValue)
         {
-            foreach (var node in nodes)
-            {
-                // Extraire toutes les propriétés du nœud
-                foreach (var property in node.Properties)
-                {
-                    values.Add(property.Value);
-                }
-            }
-        }
-        else if (subQueryResult.Data is double numericValue)
-        {
-            // Pour les agrégations numériques
             values.Add(numericValue);
+            return values;
         }
         else if (subQueryResult.Data is int intValue)
         {
-            // Pour les agrégations entières
             values.Add(intValue);
+            return values;
         }
         else if (subQueryResult.Data is decimal decimalValue)
         {
-            // Pour les agrégations décimales
             values.Add(decimalValue);
+            return values;
         }
         else if (subQueryResult.Data is long longValue)
         {
-            // Pour les agrégations long
             values.Add(longValue);
+            return values;
         }
         else if (subQueryResult.Data is string stringValue)
         {
-            // Pour les valeurs de chaîne
             values.Add(stringValue);
+            return values;
         }
         
-        Console.WriteLine($"  - Valeurs extraites de la sous-requête : {values.Count} valeurs");
+        // Si c'est une liste de nœuds
+        if (subQueryResult.Data is List<Node> nodes)
+        {
+            // Pour les sous-requêtes de type FIND, extraire seulement la propriété spécifiée
+            // ou toutes les propriétés si aucune n'est spécifiée
+            foreach (var node in nodes)
+            {
+                // Vérifier si la sous-requête a une propriété spécifique
+                if (subQueryResult.Message.Contains("property"))
+                {
+                    // Extraire seulement la propriété spécifiée
+                    var propertyMatch = Regex.Match(subQueryResult.Message, @"property\s+(\w+)");
+                    if (propertyMatch.Success)
+                    {
+                        var propertyName = propertyMatch.Groups[1].Value;
+                        if (node.Properties.TryGetValue(propertyName, out var propertyValue))
+                        {
+                            values.Add(propertyValue);
+                        }
+                    }
+                    else
+                    {
+                        // Si aucune propriété spécifique, extraire toutes les propriétés
+                        foreach (var property in node.Properties)
+                        {
+                            values.Add(property.Value);
+                        }
+                    }
+                }
+                else
+                {
+                    // Pour les sous-requêtes COUNT ou autres, extraire toutes les propriétés
+                    foreach (var property in node.Properties)
+                    {
+                        values.Add(property.Value);
+                    }
+                }
+            }
+        }
+        
+        // Si c'est une liste de valeurs (par exemple, des propriétés extraites par FindNodesAsync)
+        else if (subQueryResult.Data is List<object> listResult)
+        {
+            values.AddRange(listResult);
+            return values;
+        }
+        
         return values;
     }
 
@@ -3143,6 +1918,191 @@ public class GraphQLiteEngine : IDisposable
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Parse une sous-requête depuis une chaîne de caractères
+    /// </summary>
+    private ParsedQuery? ParseSubQueryFromString(string query)
+    {
+        try
+        {
+            var parsedQuery = new ParsedQuery { Type = QueryType.SubQuery };
+            ParseSubQueryFromString(query, parsedQuery);
+            return parsedQuery;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Parse une sous-requête depuis une chaîne de caractères (version avec ParsedQuery en paramètre)
+    /// </summary>
+    private void ParseSubQueryFromString(string query, ParsedQuery parsedQuery)
+    {
+        // Patterns pour sous-requêtes avec support amélioré des agrégations
+        var patterns = new[]
+        {
+            // Pattern 1: "select [property] from [label] where [conditions]"
+            @"select\s+(\w+|\*)\s+from\s+(\w+)(?:\s+where\s+(.+))?",
+            // Pattern 2: "find [all] [label] where [conditions]"
+            @"find\s+(?:all\s+)?(\w+)(?:\s+where\s+(.+))?",
+            // Pattern 3: "count [all] [label] where [conditions]"
+            @"count\s+(?:all\s+)?(\w+)(?:\s+where\s+(.+))?",
+            // Pattern 4: "[aggregate_function]([property]) from [label] where [conditions]"
+            @"(sum|avg|min|max|count)\s*\(\s*(\w+)\s*\)\s+from\s+(\w+)(?:\s+where\s+(.+))?",
+            // Pattern 5: "select avg [property] from [label] where [conditions]" (sans parenthèses)
+            @"select\s+(sum|avg|min|max|count)\s+(\w+)\s+from\s+(\w+)(?:\s+where\s+(.+))?",
+            // Pattern 6: "avg [property] from [label] where [conditions]" (format simple)
+            @"(sum|avg|min|max|count)\s+(\w+)\s+from\s+(\w+)(?:\s+where\s+(.+))?"
+        };
+
+        foreach (var pattern in patterns)
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(query, pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (match.Success)
+            {
+                if (pattern.Contains("select") && !pattern.Contains("select\\s+(sum|avg|min|max|count)"))
+                {
+                    // Pattern 1: SELECT
+                    parsedQuery.SubQueryProperty = match.Groups[1].Value;
+                    parsedQuery.NodeLabel = match.Groups[2].Value;
+                    parsedQuery.Type = QueryType.FindNodes;
+                    
+                    if (match.Groups.Count > 3 && !string.IsNullOrEmpty(match.Groups[3].Value))
+                    {
+                        ParseConditionsFromString(match.Groups[3].Value, parsedQuery.Conditions);
+                    }
+                }
+                else if (pattern.Contains("find"))
+                {
+                    // Pattern 2: FIND
+                    parsedQuery.NodeLabel = match.Groups[1].Value;
+                    parsedQuery.Type = QueryType.FindNodes;
+                    
+                    if (match.Groups.Count > 2 && !string.IsNullOrEmpty(match.Groups[2].Value))
+                    {
+                        ParseConditionsFromString(match.Groups[2].Value, parsedQuery.Conditions);
+                    }
+                }
+                else if (pattern.Contains("count"))
+                {
+                    // Pattern 3: COUNT
+                    parsedQuery.NodeLabel = match.Groups[1].Value;
+                    parsedQuery.Type = QueryType.Count;
+                    
+                    if (match.Groups.Count > 2 && !string.IsNullOrEmpty(match.Groups[2].Value))
+                    {
+                        ParseConditionsFromString(match.Groups[2].Value, parsedQuery.Conditions);
+                    }
+                }
+                else if (pattern.Contains("\\("))
+                {
+                    // Pattern 4: AGGREGATE avec parenthèses
+                    var functionName = match.Groups[1].Value.ToLower();
+                    parsedQuery.AggregateFunction = functionName switch
+                    {
+                        "sum" => AggregateFunction.Sum,
+                        "avg" => AggregateFunction.Avg,
+                        "min" => AggregateFunction.Min,
+                        "max" => AggregateFunction.Max,
+                        "count" => AggregateFunction.Count,
+                        _ => AggregateFunction.Count
+                    };
+                    
+                    parsedQuery.AggregateProperty = match.Groups[2].Value;
+                    parsedQuery.NodeLabel = match.Groups[3].Value;
+                    parsedQuery.Type = QueryType.Aggregate;
+                    
+                    if (match.Groups.Count > 4 && !string.IsNullOrEmpty(match.Groups[4].Value))
+                    {
+                        ParseConditionsFromString(match.Groups[4].Value, parsedQuery.Conditions);
+                    }
+                }
+                else
+                {
+                    // Patterns 5 et 6: AGGREGATE sans parenthèses
+                    var functionName = match.Groups[1].Value.ToLower();
+                    parsedQuery.AggregateFunction = functionName switch
+                    {
+                        "sum" => AggregateFunction.Sum,
+                        "avg" => AggregateFunction.Avg,
+                        "min" => AggregateFunction.Min,
+                        "max" => AggregateFunction.Max,
+                        "count" => AggregateFunction.Count,
+                        _ => AggregateFunction.Count
+                    };
+                    
+                    parsedQuery.AggregateProperty = match.Groups[2].Value;
+                    parsedQuery.NodeLabel = match.Groups[3].Value;
+                    parsedQuery.Type = QueryType.Aggregate;
+                    
+                    if (match.Groups.Count > 4 && !string.IsNullOrEmpty(match.Groups[4].Value))
+                    {
+                        ParseConditionsFromString(match.Groups[4].Value, parsedQuery.Conditions);
+                    }
+                }
+                
+                return;
+            }
+        }
+
+        // Si aucun pattern ne correspond, essayer un parsing simple
+        var simpleMatch = System.Text.RegularExpressions.Regex.Match(query, @"(\w+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (simpleMatch.Success)
+        {
+            parsedQuery.NodeLabel = simpleMatch.Groups[1].Value;
+            parsedQuery.Type = QueryType.FindNodes;
+        }
+        else
+        {
+            throw new ArgumentException($"Format de sous-requête invalide : {query}");
+        }
+    }
+
+    /// <summary>
+    /// Parse les conditions depuis une chaîne de caractères
+    /// </summary>
+    private void ParseConditionsFromString(string conditionsText, Dictionary<string, object> conditions)
+    {
+        if (string.IsNullOrWhiteSpace(conditionsText))
+            return;
+
+        // Pattern simple pour les conditions : "property operator value"
+        var match = System.Text.RegularExpressions.Regex.Match(conditionsText, @"(\w+)\s*([><=!]+)\s*(.+)");
+        if (match.Success)
+        {
+            var property = match.Groups[1].Value;
+            var operator_ = match.Groups[2].Value;
+            var value = match.Groups[3].Value.Trim('"', '\'');
+            
+            var normalizedOperator = operator_ switch
+            {
+                "=" => "eq",
+                "!=" => "ne",
+                ">" => "gt",
+                ">=" => "ge",
+                "<" => "lt",
+                "<=" => "le",
+                _ => operator_.ToLowerInvariant()
+            };
+            
+            conditions[$"{property}_{normalizedOperator}"] = value;
+        }
+    }
+
+    /// <summary>
+    /// Obtient la valeur d'un nœud pour une condition donnée
+    /// </summary>
+    private object? GetNodeValueForCondition(Node node, string conditionKey)
+    {
+        // Extraire la propriété de la clé de condition
+        var keyParts = conditionKey.Split('_');
+        var property = keyParts[0];
+        
+        return node.GetProperty<object>(property);
     }
     
 
@@ -3283,6 +2243,624 @@ public class GraphQLiteEngine : IDisposable
     private List<Node> FilterNodesByConditions(List<Node> nodes, Dictionary<string, object> conditions)
     {
         return FilterNodesByConditionsAsync(nodes, conditions).Result;
+    }
+
+    private Task<QueryResult> UpdateEdgeAsync(ParsedQuery query)
+    {
+        try
+        {
+            // Parser les références de nœuds
+            var fromNodeInfo = ParseNodeReference(query.FromNode!);
+            var toNodeInfo = ParseNodeReference(query.ToNode!);
+            
+            var fromNodes = _storage.GetAllNodes()
+                .Where(n => MatchesNodeReference(n, fromNodeInfo))
+                .ToList();
+
+            var toNodes = _storage.GetAllNodes()
+                .Where(n => MatchesNodeReference(n, toNodeInfo))
+                .ToList();
+
+            if (!fromNodes.Any())
+                return Task.FromResult(new QueryResult { Success = false, Error = $"Nœud source '{query.FromNode}' introuvable" });
+
+            if (!toNodes.Any())
+                return Task.FromResult(new QueryResult { Success = false, Error = $"Nœud destination '{query.ToNode}' introuvable" });
+
+            var fromNodeId = fromNodes.First().Id;
+            var toNodeId = toNodes.First().Id;
+
+            // Trouver les arêtes à mettre à jour
+            var allEdges = _storage.GetAllEdges();
+            var edgesToUpdate = allEdges.Where(e => 
+                (e.FromNodeId == fromNodeId && e.ToNodeId == toNodeId) ||
+                (e.FromNodeId == toNodeId && e.ToNodeId == fromNodeId)
+            ).ToList();
+
+            // Appliquer les conditions si présentes
+            if (query.Conditions.Any())
+            {
+                edgesToUpdate = FilterEdgesByConditions(edgesToUpdate, query.Conditions);
+            }
+
+            if (!edgesToUpdate.Any())
+            {
+                return Task.FromResult(new QueryResult
+                {
+                    Success = false,
+                    Error = "Aucune arête trouvée correspondant aux critères"
+                });
+            }
+
+            int updatedCount = 0;
+            foreach (var edge in edgesToUpdate)
+            {
+                // Mettre à jour les propriétés
+                foreach (var property in query.Properties)
+                {
+                    edge.SetProperty(property.Key, property.Value);
+                }
+                updatedCount++;
+            }
+
+            return Task.FromResult(new QueryResult
+            {
+                Success = true,
+                Message = $"{updatedCount} arête(s) mise(s) à jour"
+            });
+        }
+        catch (Exception ex)
+        {
+            return Task.FromResult(new QueryResult
+            {
+                Success = false,
+                Error = $"Erreur lors de la mise à jour d'arête : {ex.Message}"
+            });
+        }
+    }
+
+    private Task<QueryResult> ExecuteEdgeAggregateAsync(ParsedQuery query)
+    {
+        try
+        {
+            if (query.AggregateFunction == null || string.IsNullOrEmpty(query.AggregateProperty))
+            {
+                return Task.FromResult(new QueryResult
+                {
+                    Success = false,
+                    Error = "Fonction d'agrégation ou propriété manquante pour les arêtes"
+                });
+            }
+
+            var allEdges = _storage.GetAllEdges();
+            var filteredEdges = new List<Edge>();
+
+            // Appliquer les filtres selon les propriétés de la requête
+            foreach (var edge in allEdges)
+            {
+                bool includeEdge = true;
+
+                // Filtre par type d'arête
+                if (!string.IsNullOrEmpty(query.EdgeType))
+                {
+                    if (!edge.RelationType.Equals(query.EdgeType, StringComparison.OrdinalIgnoreCase))
+                    {
+                        includeEdge = false;
+                    }
+                }
+
+                // Filtre par type d'arête à éviter
+                if (query.Properties.ContainsKey("avoid_edge_type"))
+                {
+                    var avoidEdgeType = query.Properties["avoid_edge_type"].ToString();
+                    if (edge.RelationType.Equals(avoidEdgeType, StringComparison.OrdinalIgnoreCase))
+                    {
+                        includeEdge = false;
+                    }
+                }
+
+                // Filtre par labels de nœuds source et destination
+                if (query.Properties.ContainsKey("from_label") || query.Properties.ContainsKey("to_label"))
+                {
+                    var fromLabel = query.Properties.GetValueOrDefault("from_label")?.ToString();
+                    var toLabel = query.Properties.GetValueOrDefault("to_label")?.ToString();
+                    
+                    var fromNode = _storage.GetNode(edge.FromNodeId);
+                    var toNode = _storage.GetNode(edge.ToNodeId);
+                    
+                    if (fromNode != null && toNode != null)
+                    {
+                        if (!string.IsNullOrEmpty(fromLabel) && !fromNode.Label.Equals(fromLabel, StringComparison.OrdinalIgnoreCase))
+                        {
+                            includeEdge = false;
+                        }
+                        if (!string.IsNullOrEmpty(toLabel) && !toNode.Label.Equals(toLabel, StringComparison.OrdinalIgnoreCase))
+                        {
+                            includeEdge = false;
+                        }
+                    }
+                }
+
+                // Filtre par label de nœud connecté
+                if (query.Properties.ContainsKey("connected_to_label"))
+                {
+                    var connectedToLabel = query.Properties["connected_to_label"].ToString();
+                    var fromNode = _storage.GetNode(edge.FromNodeId);
+                    var toNode = _storage.GetNode(edge.ToNodeId);
+                    
+                    bool hasConnectedNode = false;
+                    if (fromNode != null && fromNode.Label.Equals(connectedToLabel, StringComparison.OrdinalIgnoreCase))
+                    {
+                        hasConnectedNode = true;
+                    }
+                    if (toNode != null && toNode.Label.Equals(connectedToLabel, StringComparison.OrdinalIgnoreCase))
+                    {
+                        hasConnectedNode = true;
+                    }
+                    
+                    if (!hasConnectedNode)
+                    {
+                        includeEdge = false;
+                    }
+                }
+
+                // Filtre par nombre maximum d'étapes (pour les chemins)
+                if (query.MaxSteps.HasValue)
+                {
+                    // Pour les agrégations avec max steps, on peut filtrer par distance
+                    // Cette logique peut être étendue selon les besoins
+                }
+
+                // Appliquer les conditions WHERE si présentes
+                if (includeEdge && query.Conditions.Any())
+                {
+                    includeEdge = FilterEdgesByConditions(new List<Edge> { edge }, query.Conditions).Any();
+                }
+
+                if (includeEdge)
+                {
+                    filteredEdges.Add(edge);
+                }
+            }
+
+            // Extraire les valeurs numériques de la propriété spécifiée
+            var numericValues = new List<double>();
+            var missingPropertyCount = 0;
+            var nonNumericCount = 0;
+
+            foreach (var edge in filteredEdges)
+            {
+                if (edge.Properties.TryGetValue(query.AggregateProperty, out var value))
+                {
+                    if (TryConvertToDouble(value, out double numericValue))
+                    {
+                        numericValues.Add(numericValue);
+                    }
+                    else
+                    {
+                        nonNumericCount++;
+                    }
+                }
+                else
+                {
+                    missingPropertyCount++;
+                }
+            }
+
+            // Gestion intelligente des cas vides ou non numériques
+            bool isEmpty = !numericValues.Any();
+            object? result = null;
+            string functionName = query.AggregateFunction.ToString().ToLowerInvariant();
+            string message;
+
+            if (isEmpty)
+            {
+                switch (query.AggregateFunction)
+                {
+                    case AggregateFunction.Sum:
+                    case AggregateFunction.Count:
+                        result = 0;
+                        break;
+                    case AggregateFunction.Avg:
+                    case AggregateFunction.Min:
+                    case AggregateFunction.Max:
+                        result = null;
+                        break;
+                    default:
+                        result = null;
+                        break;
+                }
+
+                // Message détaillé pour le debug
+                var details = new List<string>();
+                if (missingPropertyCount > 0) details.Add($"{missingPropertyCount} arête(s) sans propriété '{query.AggregateProperty}'");
+                if (nonNumericCount > 0) details.Add($"{nonNumericCount} arête(s) avec valeur non numérique");
+                if (filteredEdges.Count == 0) details.Add("Aucune arête trouvée");
+
+                var detailMessage = details.Any() ? $" ({string.Join(", ", details)})" : "";
+                message = $"Aucune valeur numérique trouvée pour la propriété '{query.AggregateProperty}' sur les arêtes{detailMessage}";
+            }
+            else
+            {
+                result = query.AggregateFunction switch
+                {
+                    AggregateFunction.Sum => numericValues.Sum(),
+                    AggregateFunction.Avg => numericValues.Average(),
+                    AggregateFunction.Min => numericValues.Min(),
+                    AggregateFunction.Max => numericValues.Max(),
+                    AggregateFunction.Count => numericValues.Count,
+                    _ => throw new NotSupportedException($"Fonction d'agrégation non supportée : {query.AggregateFunction}")
+                };
+
+                var detailMessage = "";
+                if (missingPropertyCount > 0 || nonNumericCount > 0)
+                {
+                    var details = new List<string>();
+                    if (missingPropertyCount > 0) details.Add($"{missingPropertyCount} sans propriété");
+                    if (nonNumericCount > 0) details.Add($"{nonNumericCount} non numériques");
+                    detailMessage = $" (ignoré: {string.Join(", ", details)})";
+                }
+
+                message = $"{functionName.ToUpperInvariant()}({query.AggregateProperty}) sur {numericValues.Count} arête(s) = {result}{detailMessage}";
+            }
+
+            return Task.FromResult(new QueryResult
+            {
+                Success = true,
+                Message = message,
+                Data = result
+            });
+        }
+        catch (Exception ex)
+        {
+            return Task.FromResult(new QueryResult
+            {
+                Success = false,
+                Error = $"Erreur lors de l'agrégation sur les arêtes : {ex.Message}"
+            });
+        }
+    }
+
+    private Task<QueryResult> ExecuteAggregateAsync(ParsedQuery query)
+    {
+        // Remplacer les variables dans la requête avant traitement
+        ReplaceVariablesInParsedQuery(query);
+        
+        if (query.AggregateFunction == null || string.IsNullOrEmpty(query.AggregateProperty))
+        {
+            return Task.FromResult(new QueryResult
+            {
+                Success = false,
+                Error = "Fonction d'agrégation ou propriété manquante"
+            });
+        }
+
+        // Vérifier si c'est une agrégation sur les arêtes
+        if (query.Properties.ContainsKey("aggregate_edges"))
+        {
+            return ExecuteEdgeAggregateAsync(query);
+        }
+        
+        var nodes = _storage.GetNodesByLabel(query.NodeLabel!);
+        
+        // Appliquer les conditions WHERE si présentes
+        if (query.Conditions.Any())
+        {
+            nodes = FilterNodesByConditions(nodes, query.Conditions);
+        }
+
+        // Extraire les valeurs numériques de la propriété spécifiée
+        var numericValues = new List<double>();
+        var missingPropertyCount = 0;
+        var nonNumericCount = 0;
+        
+        foreach (var node in nodes)
+        {
+            if (node.Properties.TryGetValue(query.AggregateProperty, out var value))
+            {
+                if (TryConvertToDouble(value, out double numericValue))
+                {
+                    numericValues.Add(numericValue);
+                }
+                else
+                {
+                    nonNumericCount++;
+                }
+            }
+            else
+            {
+                missingPropertyCount++;
+            }
+        }
+
+        // Gestion intelligente des cas vides ou non numériques
+        bool isEmpty = !numericValues.Any();
+        object? result = null;
+        string functionName = query.AggregateFunction.ToString().ToLowerInvariant();
+        string message;
+        
+        if (isEmpty)
+        {
+            switch (query.AggregateFunction)
+            {
+                case AggregateFunction.Sum:
+                case AggregateFunction.Count:
+                    result = 0;
+                    break;
+                case AggregateFunction.Avg:
+                case AggregateFunction.Min:
+                case AggregateFunction.Max:
+                    result = null;
+                    break;
+                default:
+                    result = null;
+                    break;
+            }
+            
+            // Message détaillé pour le debug
+            var details = new List<string>();
+            if (missingPropertyCount > 0) details.Add($"{missingPropertyCount} nœud(s) sans propriété '{query.AggregateProperty}'");
+            if (nonNumericCount > 0) details.Add($"{nonNumericCount} nœud(s) avec valeur non numérique");
+            if (nodes.Count == 0) details.Add("Aucun nœud trouvé");
+            
+            var detailMessage = details.Any() ? $" ({string.Join(", ", details)})" : "";
+            message = $"Aucune valeur numérique trouvée pour la propriété '{query.AggregateProperty}' sur les nœuds de type '{query.NodeLabel}'{detailMessage}";
+        }
+        else
+        {
+            result = query.AggregateFunction switch
+            {
+                AggregateFunction.Sum => numericValues.Sum(),
+                AggregateFunction.Avg => numericValues.Average(),
+                AggregateFunction.Min => numericValues.Min(),
+                AggregateFunction.Max => numericValues.Max(),
+                AggregateFunction.Count => numericValues.Count,
+                _ => throw new NotSupportedException($"Fonction d'agrégation non supportée : {query.AggregateFunction}")
+            };
+            
+            var detailMessage = "";
+            if (missingPropertyCount > 0 || nonNumericCount > 0)
+            {
+                var details = new List<string>();
+                if (missingPropertyCount > 0) details.Add($"{missingPropertyCount} sans propriété");
+                if (nonNumericCount > 0) details.Add($"{nonNumericCount} non numériques");
+                detailMessage = $" (ignoré: {string.Join(", ", details)})";
+            }
+            
+            message = $"{functionName.ToUpperInvariant()}({query.AggregateProperty}) sur {numericValues.Count} nœud(s) de type '{query.NodeLabel}' = {result}{detailMessage}";
+        }
+
+        return Task.FromResult(new QueryResult
+        {
+            Success = true,
+            Message = message,
+            Data = result
+        });
+    }
+
+    private async Task<QueryResult> ExecuteBatchOperationAsync(ParsedQuery query)
+    {
+        try
+        {
+            var startTime = DateTime.UtcNow;
+            var results = new List<BatchOperationResult>();
+            
+            // Exécuter les opérations batch selon le type
+            if (query.BatchOperations != null && query.BatchOperations.Any())
+            {
+                foreach (var batchOp in query.BatchOperations)
+                {
+                    var result = await ExecuteParsedQueryAsync(batchOp);
+                    results.Add(new BatchOperationResult
+                    {
+                        Success = result.Success,
+                        Message = result.Message,
+                        Error = result.Error,
+                        Data = result.Data
+                    });
+                }
+            }
+            
+            var endTime = DateTime.UtcNow;
+            var totalTime = (endTime - startTime).TotalMilliseconds;
+            
+            return new QueryResult
+            {
+                Success = true,
+                Message = $"Opérations batch terminées en {totalTime:F2}ms",
+                Data = results
+            };
+        }
+        catch (Exception ex)
+        {
+            return new QueryResult
+            {
+                Success = false,
+                Error = $"Erreur lors de l'exécution des opérations batch : {ex.Message}"
+            };
+        }
+    }
+
+    private List<Edge> FilterEdgesByConditions(List<Edge> edges, Dictionary<string, object> conditions)
+    {
+        var filteredEdges = new List<Edge>();
+        
+        foreach (var edge in edges)
+        {
+            bool includeEdge = true;
+            
+            foreach (var condition in conditions)
+            {
+                if (!EvaluateEdgeCondition(edge, condition.Key, condition.Value))
+                {
+                    includeEdge = false;
+                    break;
+                }
+            }
+            
+            if (includeEdge)
+            {
+                filteredEdges.Add(edge);
+            }
+        }
+        
+        return filteredEdges;
+    }
+
+    private List<Node> FilterNodesByConditionsSync(List<Node> nodes, Dictionary<string, object> conditions)
+    {
+        var filteredNodes = new List<Node>();
+        
+        foreach (var node in nodes)
+        {
+            bool includeNode = true;
+            
+            foreach (var condition in conditions)
+            {
+                if (!EvaluateCondition(node, condition.Key, condition.Value))
+                {
+                    includeNode = false;
+                    break;
+                }
+            }
+            
+            if (includeNode)
+            {
+                filteredNodes.Add(node);
+            }
+        }
+        
+        return filteredNodes;
+    }
+
+    private async Task<bool> EvaluateSubQueryConditionAsync(Node node, string conditionKey, ParsedQuery subQuery)
+    {
+        try
+        {
+            // Exécuter la sous-requête
+            var subQueryResult = await ExecuteSubQueryAsync(subQuery);
+            
+            if (!subQueryResult.Success)
+            {
+                return false;
+            }
+            
+            // Extraire les valeurs de la sous-requête
+            var subQueryValues = ExtractSubQueryValues(subQueryResult);
+            
+            if (!subQueryValues.Any())
+            {
+                return false;
+            }
+            
+            // Évaluer selon l'opérateur de la condition
+            var nodeValue = GetNodeValueForCondition(node, conditionKey);
+            
+            // Déterminer l'opérateur de comparaison
+            if (conditionKey.Contains("_in"))
+            {
+                return EvaluateInOperator(nodeValue, subQueryValues);
+            }
+            else if (conditionKey.Contains("_exists"))
+            {
+                return EvaluateExistsOperator(subQueryValues);
+            }
+            else if (conditionKey.Contains("_any"))
+            {
+                return EvaluateAnyOperator(nodeValue, subQueryValues);
+            }
+            else if (conditionKey.Contains("_all"))
+            {
+                return EvaluateAllOperator(nodeValue, subQueryValues);
+            }
+            else if (conditionKey.Contains("_count"))
+            {
+                var comparisonValue = ExtractComparisonValue(conditionKey);
+                return EvaluateCountOperator(subQueryValues, "eq", comparisonValue);
+            }
+            else
+            {
+                // Comparaison directe avec la première valeur
+                return CompareForEquality(nodeValue, subQueryValues.First());
+            }
+        }
+        catch (Exception ex)
+        {
+            return false;
+        }
+    }
+
+    public void ClearSubQueryCache()
+    {
+        _subQueryCache.Clear();
+    }
+
+    private readonly Dictionary<string, QueryResult> _subQueryCache = new();
+
+    private bool TryConvertToDouble(object? value, out double result)
+    {
+        result = 0;
+        
+        if (value == null)
+            return false;
+            
+        if (value is double d)
+        {
+            result = d;
+            return true;
+        }
+        
+        if (value is int i)
+        {
+            result = i;
+            return true;
+        }
+        
+        if (value is long l)
+        {
+            result = l;
+            return true;
+        }
+        
+        if (value is float f)
+        {
+            result = f;
+            return true;
+        }
+        
+        if (value is decimal dec)
+        {
+            result = (double)dec;
+            return true;
+        }
+        
+        if (value is string str)
+        {
+            return double.TryParse(str, out result);
+        }
+        
+        return false;
+    }
+
+    private bool EvaluateCondition(Node node, string conditionKey, object expectedValue)
+    {
+        try
+        {
+            var actualValue = GetNodeValueForCondition(node, conditionKey);
+            
+            if (actualValue == null && expectedValue == null)
+                return true;
+            
+            if (actualValue == null || expectedValue == null)
+                return false;
+            
+            // Comparaison directe
+            return CompareForEquality(actualValue, expectedValue);
+        }
+        catch (Exception ex)
+        {
+            return false;
+        }
     }
 }
 /// <summary>

@@ -91,7 +91,42 @@ public class VariableManager
                 
                 if (foundVariable.Key != null)
                 {
-                    return foundVariable.Value?.ToString() ?? "";
+                    var value = foundVariable.Value?.ToString() ?? "";
+                    
+                    // Gestion spéciale pour les variables dans des contextes complexes
+                    if (IsComplexContext(text))
+                    {
+                        value = ProcessComplexContextValue(value, text);
+                    }
+                    else
+                    {
+                        // Supprimer les guillemets superflus pour les variables dans les conditions
+                        if (value.StartsWith("\"") && value.EndsWith("\""))
+                        {
+                            value = value.Substring(1, value.Length - 2);
+                        }
+                        else if (value.StartsWith("'") && value.EndsWith("'"))
+                        {
+                            value = value.Substring(1, value.Length - 2);
+                        }
+                        
+                        // Nettoyer les guillemets dans les conditions complexes
+                        if (value.Contains("\"") && (value.Contains(" and ") || value.Contains(" or ") || value.Contains(" eq ") || value.Contains(" gt ") || value.Contains(" lt ")))
+                        {
+                            value = value.Replace("\"", "");
+                        }
+                        
+                        // Nettoyer les "and" en trop dans les valeurs
+                        if (value.Contains(" and ") && !value.Contains("=") && !value.Contains(">") && !value.Contains("<") && !value.Contains(" eq ") && !value.Contains(" gt ") && !value.Contains(" lt "))
+                        {
+                            value = value.Replace(" and ", "");
+                        }
+                        
+                        // Nettoyer les espaces superflus
+                        value = value.Trim();
+                    }
+                    
+                    return value;
                 }
                 return match.Value; // Garde la référence si la variable n'existe pas
             });
@@ -101,7 +136,69 @@ public class VariableManager
     }
     
     /// <summary>
-    /// Remplace les variables dans un dictionnaire de propriétés
+    /// Détermine si le contexte est complexe (relations, conditions avancées, etc.)
+    /// </summary>
+    private bool IsComplexContext(string text)
+    {
+        var complexKeywords = new[]
+        {
+            "connected to", "connected via", "has edge", "via", "avoiding",
+            "with max steps", "bidirectional", "where", "and", "or",
+            "eq", "gt", "lt", "contains", "starts with", "ends with"
+        };
+        
+        return complexKeywords.Any(keyword => text.Contains(keyword, StringComparison.OrdinalIgnoreCase));
+    }
+    
+    /// <summary>
+    /// Traite les valeurs de variables dans des contextes complexes
+    /// </summary>
+    private string ProcessComplexContextValue(string value, string context)
+    {
+        // Nettoyer la valeur de base
+        value = value.Trim();
+        
+        // Supprimer les guillemets superflus
+        if (value.StartsWith("\"") && value.EndsWith("\""))
+        {
+            value = value.Substring(1, value.Length - 2);
+        }
+        else if (value.StartsWith("'") && value.EndsWith("'"))
+        {
+            value = value.Substring(1, value.Length - 2);
+        }
+        
+        // Gestion spéciale selon le contexte
+        if (context.Contains("connected to", StringComparison.OrdinalIgnoreCase) ||
+            context.Contains("has edge", StringComparison.OrdinalIgnoreCase))
+        {
+            // Pour les relations, garder la valeur telle quelle
+            return value;
+        }
+        else if (context.Contains("where", StringComparison.OrdinalIgnoreCase))
+        {
+            // Pour les conditions WHERE, nettoyer les opérateurs logiques en trop
+            if (value.Contains(" and ") && !value.Contains("=") && !value.Contains(">") && !value.Contains("<"))
+            {
+                value = value.Replace(" and ", " ");
+            }
+            if (value.Contains(" or ") && !value.Contains("=") && !value.Contains(">") && !value.Contains("<"))
+            {
+                value = value.Replace(" or ", " ");
+            }
+        }
+        else if (context.Contains("via", StringComparison.OrdinalIgnoreCase) ||
+                 context.Contains("avoiding", StringComparison.OrdinalIgnoreCase))
+        {
+            // Pour les types d'arêtes, garder la valeur simple
+            return value.Trim();
+        }
+        
+        return value;
+    }
+    
+    /// <summary>
+    /// Remplace les variables dans un dictionnaire de propriétés avec gestion avancée
     /// </summary>
     public Dictionary<string, object> ReplaceVariablesInProperties(Dictionary<string, object> properties)
     {
@@ -117,6 +214,32 @@ public class VariableManager
             {
                 value = ReplaceVariables(strValue);
             }
+            else if (value is Dictionary<string, object> dictValue)
+            {
+                // Récursivement remplacer les variables dans les dictionnaires imbriqués
+                value = ReplaceVariablesInProperties(dictValue);
+            }
+            else if (value is List<object> listValue)
+            {
+                // Remplacer les variables dans les listes
+                var newList = new List<object>();
+                foreach (var item in listValue)
+                {
+                    if (item is string strItem)
+                    {
+                        newList.Add(ReplaceVariables(strItem));
+                    }
+                    else if (item is Dictionary<string, object> dictItem)
+                    {
+                        newList.Add(ReplaceVariablesInProperties(dictItem));
+                    }
+                    else
+                    {
+                        newList.Add(item);
+                    }
+                }
+                value = newList;
+            }
             
             result[key] = value;
         }
@@ -125,7 +248,7 @@ public class VariableManager
     }
     
     /// <summary>
-    /// Remplace les variables dans un dictionnaire de conditions
+    /// Remplace les variables dans un dictionnaire de conditions avec gestion avancée
     /// </summary>
     public Dictionary<string, object> ReplaceVariablesInConditions(Dictionary<string, object> conditions)
     {
@@ -141,10 +264,94 @@ public class VariableManager
             {
                 value = ReplaceVariables(strValue);
             }
+            else if (value is Dictionary<string, object> dictValue)
+            {
+                // Récursivement remplacer les variables dans les dictionnaires imbriqués
+                value = ReplaceVariablesInConditions(dictValue);
+            }
+            else if (value is List<object> listValue)
+            {
+                // Remplacer les variables dans les listes
+                var newList = new List<object>();
+                foreach (var item in listValue)
+                {
+                    if (item is string strItem)
+                    {
+                        newList.Add(ReplaceVariables(strItem));
+                    }
+                    else if (item is Dictionary<string, object> dictItem)
+                    {
+                        newList.Add(ReplaceVariablesInConditions(dictItem));
+                    }
+                    else
+                    {
+                        newList.Add(item);
+                    }
+                }
+                value = newList;
+            }
             
             result[key] = value;
         }
         
         return result;
+    }
+    
+    /// <summary>
+    /// Remplace les variables dans une requête ParsedQuery
+    /// </summary>
+    public void ReplaceVariablesInParsedQuery(ParsedQuery query)
+    {
+        if (query == null) return;
+        
+        // Remplacer les variables dans les propriétés de base
+        query.Properties = ReplaceVariablesInProperties(query.Properties);
+        
+        // Remplacer les variables dans les nœuds source et destination
+        if (!string.IsNullOrEmpty(query.FromNode))
+        {
+            query.FromNode = ReplaceVariables(query.FromNode);
+        }
+        
+        if (!string.IsNullOrEmpty(query.ToNode))
+        {
+            query.ToNode = ReplaceVariables(query.ToNode);
+        }
+        
+        // Remplacer les variables dans le type d'arête
+        if (!string.IsNullOrEmpty(query.EdgeType))
+        {
+            query.EdgeType = ReplaceVariables(query.EdgeType);
+        }
+        
+        // Remplacer les variables dans le label de nœud
+        if (!string.IsNullOrEmpty(query.NodeLabel))
+        {
+            query.NodeLabel = ReplaceVariables(query.NodeLabel);
+        }
+        
+        // Remplacer les variables dans les conditions
+        query.Conditions = ReplaceVariablesInConditions(query.Conditions);
+        
+        // Remplacer les variables dans les propriétés d'agrégation
+        if (!string.IsNullOrEmpty(query.AggregateProperty))
+        {
+            query.AggregateProperty = ReplaceVariables(query.AggregateProperty);
+        }
+        
+        // Remplacer les variables dans les sous-requêtes
+        foreach (var subQuery in query.SubQueries)
+        {
+            ReplaceVariablesInParsedQuery(subQuery);
+        }
+        
+        // Remplacer les variables dans les opérations batch
+        if (query.BatchOperations != null)
+        {
+            foreach (var batchOp in query.BatchOperations)
+            {
+                ReplaceVariablesInParsedQuery(batchOp);
+            }
+        }
     }
 } 
