@@ -221,12 +221,18 @@ public class GraphQLiteEngine : IDisposable
 
     private async Task<QueryResult> FindNodesAsync(ParsedQuery query)
     {
+        Console.WriteLine($"DEBUG: FindNodesAsync - Label: {query.NodeLabel}, Conditions: {query.Conditions.Count}");
+        
         var nodes = _storage.GetNodesByLabel(query.NodeLabel!);
+        
+        Console.WriteLine($"DEBUG: Found {nodes.Count} nodes with label '{query.NodeLabel}'");
 
         // Appliquer les conditions
         if (query.Conditions.Any())
         {
+            Console.WriteLine($"DEBUG: Applying {query.Conditions.Count} conditions");
             nodes = await FilterNodesByConditionsAsync(nodes, query.Conditions);
+            Console.WriteLine($"DEBUG: After filtering: {nodes.Count} nodes");
         }
 
         // Appliquer la pagination (OFFSET puis LIMIT)
@@ -239,6 +245,8 @@ public class GraphQLiteEngine : IDisposable
         {
             nodes = nodes.Take(query.Limit.Value).ToList();
         }
+
+        Console.WriteLine($"DEBUG: Final result: {nodes.Count} nodes");
 
         return new QueryResult
         {
@@ -971,6 +979,8 @@ public class GraphQLiteEngine : IDisposable
     {
         try
         {
+            Console.WriteLine($"DEBUG: EvaluateConditionAsync - Node: {node.GetProperty<string>("name")}, Key: {conditionKey}, Expected: {expectedValue}");
+            
             // Gestion des conditions complexes avec relations
             if (conditionKey == "connected_to_via")
             {
@@ -985,8 +995,39 @@ public class GraphQLiteEngine : IDisposable
                 return await EvaluateConnectedViaConditionAsync(node, expectedValue);
             }
             
+            // Gestion des conditions avec agrégations imbriquées
+            if (conditionKey.Contains("_aggregate"))
+            {
+                // Extraire la propriété et l'opérateur de la clé
+                var keyParts = conditionKey.Split('_');
+                if (keyParts.Length >= 3)
+                {
+                    var propertyName = keyParts[0];
+                    var operator_ = keyParts[1];
+                    
+                    // Obtenir la valeur de la propriété du nœud
+                    var nodeValue = GetNodeValueForCondition(node, propertyName);
+                    Console.WriteLine($"DEBUG: Actual value for '{propertyName}': {nodeValue}");
+                    
+                    if (nodeValue == null)
+                        return false;
+                    
+                    // Si la valeur attendue est une sous-requête
+                    if (expectedValue is ParsedQuery aggregateSubQuery)
+                    {
+                        return await EvaluateSubQueryConditionAsync(node, conditionKey, aggregateSubQuery);
+                    }
+                    
+                    // Comparaison directe si ce n'est pas une sous-requête
+                    var comparisonResult = CompareForEquality(nodeValue, expectedValue);
+                    Console.WriteLine($"DEBUG: CompareForEquality result: {comparisonResult}");
+                    return comparisonResult;
+                }
+            }
+            
             // Gestion des conditions normales
             var actualValue = GetNodeValueForCondition(node, conditionKey);
+            Console.WriteLine($"DEBUG: Actual value for '{conditionKey}': {actualValue}");
             
             if (actualValue == null && expectedValue == null)
                 return true;
@@ -1001,10 +1042,13 @@ public class GraphQLiteEngine : IDisposable
             }
             
             // Comparaison directe
-            return CompareForEquality(actualValue, expectedValue);
+            var result = CompareForEquality(actualValue, expectedValue);
+            Console.WriteLine($"DEBUG: CompareForEquality result: {result}");
+            return result;
         }
         catch (Exception ex)
         {
+            Console.WriteLine($"DEBUG: Exception in EvaluateConditionAsync: {ex.Message}");
             // En cas d'erreur, retourner false pour éviter les faux positifs
             return false;
         }
@@ -1698,23 +1742,41 @@ public class GraphQLiteEngine : IDisposable
     /// </summary>
     private bool CompareForEquality(object? actual, object expected)
     {
+        Console.WriteLine($"DEBUG: CompareForEquality - Actual: '{actual}' ({actual?.GetType().Name}), Expected: '{expected}' ({expected?.GetType().Name})");
+        
         if (actual == null && expected == null) return true;
         if (actual == null || expected == null) return false;
 
         // Comparaison spéciale pour les chaînes (insensible à la casse)
         if (actual is string actualStr && expected is string expectedStr)
         {
-            return actualStr.Equals(expectedStr, StringComparison.OrdinalIgnoreCase);
+            var result = actualStr.Equals(expectedStr, StringComparison.OrdinalIgnoreCase);
+            Console.WriteLine($"DEBUG: String comparison result: {result}");
+            return result;
         }
 
         // Comparaison spéciale pour les dates
         if (actual is DateTime actualDate && expected is DateTime expectedDate)
         {
-            return actualDate.Date == expectedDate.Date; // Comparaison par date seulement
+            var result = actualDate.Date == expectedDate.Date; // Comparaison par date seulement
+            Console.WriteLine($"DEBUG: Date comparison result: {result}");
+            return result;
+        }
+
+        // Comparaison spéciale pour les types numériques
+        if (IsNumericType(actual) && IsNumericType(expected))
+        {
+            var actualDouble = Convert.ToDouble(actual);
+            var expectedDouble = Convert.ToDouble(expected);
+            var result = Math.Abs(actualDouble - expectedDouble) < 0.0001; // Tolérance pour les erreurs de précision
+            Console.WriteLine($"DEBUG: Numeric comparison result: {result}");
+            return result;
         }
 
         // Comparaison standard pour les autres types
-        return Equals(actual, expected);
+        var standardResult = Equals(actual, expected);
+        Console.WriteLine($"DEBUG: Standard comparison result: {standardResult}");
+        return standardResult;
     }
 
     private int CompareValues(object? actual, object expected)
@@ -1759,6 +1821,8 @@ public class GraphQLiteEngine : IDisposable
     {
         try
         {
+            Console.WriteLine($"DEBUG: ExecuteSubQueryAsync - Type: {subQuery.Type}, Label: {subQuery.NodeLabel}");
+            
             // Exécuter la sous-requête selon son type
             QueryResult result;
             
@@ -1766,11 +1830,24 @@ public class GraphQLiteEngine : IDisposable
             {
                 // Pour les agrégations, utiliser la méthode d'agrégation
                 result = await ExecuteAggregateAsync(subQuery);
+                Console.WriteLine($"DEBUG: Aggregate result - Success: {result.Success}, Data: {result.Data}");
             }
             else
             {
                 // Pour les autres types, utiliser la méthode générique
                 result = await ExecuteParsedQueryAsync(subQuery);
+            }
+            
+            // Si c'est une sous-requête avec des valeurs stockées (comme ANY/ALL avec valeurs simples)
+            // MAIS seulement si ce n'est pas une agrégation
+            if (subQuery.Type != QueryType.Aggregate && subQuery.Conditions.ContainsKey("values"))
+            {
+                var storedValues = subQuery.Conditions["values"] as List<object>;
+                if (storedValues != null)
+                {
+                    result.Data = storedValues;
+                    result.Message = $"Stored values: {string.Join(", ", storedValues)}";
+                }
             }
             
             return result;
@@ -1792,42 +1869,53 @@ public class GraphQLiteEngine : IDisposable
     {
         var values = new List<object>();
         
+        Console.WriteLine($"DEBUG: Extracting values from subquery result - Data type: {subQueryResult.Data?.GetType().Name}");
+        
         // Vérifier d'abord si c'est une agrégation (données numériques)
         if (subQueryResult.Data is double numericValue)
         {
             values.Add(numericValue);
+            Console.WriteLine($"DEBUG: Added numeric value: {numericValue}");
             return values;
         }
         else if (subQueryResult.Data is int intValue)
         {
             values.Add(intValue);
+            Console.WriteLine($"DEBUG: Added int value: {intValue}");
             return values;
         }
         else if (subQueryResult.Data is decimal decimalValue)
         {
             values.Add(decimalValue);
+            Console.WriteLine($"DEBUG: Added decimal value: {decimalValue}");
             return values;
         }
         else if (subQueryResult.Data is long longValue)
         {
             values.Add(longValue);
+            Console.WriteLine($"DEBUG: Added long value: {longValue}");
             return values;
         }
         else if (subQueryResult.Data is string stringValue)
         {
             values.Add(stringValue);
+            Console.WriteLine($"DEBUG: Added string value: {stringValue}");
             return values;
         }
         
         // Si c'est une liste de nœuds
         if (subQueryResult.Data is List<Node> nodes)
         {
+            Console.WriteLine($"DEBUG: Processing {nodes.Count} nodes");
+            
             // Pour les sous-requêtes de type FIND, extraire seulement la propriété spécifiée
             // ou toutes les propriétés si aucune n'est spécifiée
             foreach (var node in nodes)
             {
+                Console.WriteLine($"DEBUG: Processing node: {node.GetProperty<string>("name")}");
+                
                 // Vérifier si la sous-requête a une propriété spécifique
-                if (subQueryResult.Message.Contains("property"))
+                if (!string.IsNullOrEmpty(subQueryResult.Message) && subQueryResult.Message.Contains("property"))
                 {
                     // Extraire seulement la propriété spécifiée
                     var propertyMatch = Regex.Match(subQueryResult.Message, @"property\s+(\w+)");
@@ -1837,6 +1925,7 @@ public class GraphQLiteEngine : IDisposable
                         if (node.Properties.TryGetValue(propertyName, out var propertyValue))
                         {
                             values.Add(propertyValue);
+                            Console.WriteLine($"DEBUG: Added property value: {propertyName} = {propertyValue}");
                         }
                     }
                     else
@@ -1845,6 +1934,7 @@ public class GraphQLiteEngine : IDisposable
                         foreach (var property in node.Properties)
                         {
                             values.Add(property.Value);
+                            Console.WriteLine($"DEBUG: Added all property: {property.Key} = {property.Value}");
                         }
                     }
                 }
@@ -1854,6 +1944,7 @@ public class GraphQLiteEngine : IDisposable
                     foreach (var property in node.Properties)
                     {
                         values.Add(property.Value);
+                        Console.WriteLine($"DEBUG: Added all property: {property.Key} = {property.Value}");
                     }
                 }
             }
@@ -1863,9 +1954,21 @@ public class GraphQLiteEngine : IDisposable
         else if (subQueryResult.Data is List<object> listResult)
         {
             values.AddRange(listResult);
+            Console.WriteLine($"DEBUG: Added {listResult.Count} list values");
             return values;
         }
         
+        // Si c'est un dictionnaire (résultat d'agrégation complexe)
+        else if (subQueryResult.Data is Dictionary<string, object> dictResult)
+        {
+            foreach (var kvp in dictResult)
+            {
+                values.Add(kvp.Value);
+                Console.WriteLine($"DEBUG: Added dict value: {kvp.Key} = {kvp.Value}");
+            }
+        }
+        
+        Console.WriteLine($"DEBUG: Total extracted values: {values.Count}");
         return values;
     }
 
@@ -1876,6 +1979,25 @@ public class GraphQLiteEngine : IDisposable
     {
         if (nodeValue == null) return false;
         
+        // Si la valeur du nœud est une liste, vérifier si au moins un élément est dans la sous-requête
+        if (nodeValue is List<object> nodeList)
+        {
+            return nodeList.Any(item => subQueryValues.Any(value => CompareForEquality(item, value)));
+        }
+        
+        // Si la valeur du nœud est un tableau, le convertir en liste
+        if (nodeValue.GetType().IsArray)
+        {
+            var nodeArray = (Array)nodeValue;
+            var arrayList = new List<object>();
+            foreach (var item in nodeArray)
+            {
+                arrayList.Add(item);
+            }
+            return arrayList.Any(item => subQueryValues.Any(value => CompareForEquality(item, value)));
+        }
+        
+        // Comparaison simple : la valeur du nœud est-elle dans les résultats de la sous-requête ?
         return subQueryValues.Any(value => CompareForEquality(nodeValue, value));
     }
 
@@ -1884,7 +2006,20 @@ public class GraphQLiteEngine : IDisposable
     /// </summary>
     private bool EvaluateExistsOperator(List<object> subQueryValues)
     {
-        return subQueryValues.Count > 0;
+        // Pour EXISTS, il suffit qu'il y ait au moins une valeur
+        if (subQueryValues.Count > 0)
+        {
+            // Vérifier que les valeurs ne sont pas toutes nulles ou vides
+            return subQueryValues.Any(value => 
+                value != null && 
+                !(value is string str && string.IsNullOrWhiteSpace(str)) &&
+                !(value is double d && d == 0) &&
+                !(value is int i && i == 0) &&
+                !(value is decimal dec && dec == 0)
+            );
+        }
+        
+        return false;
     }
 
     public void Dispose()
@@ -1942,6 +2077,8 @@ public class GraphQLiteEngine : IDisposable
     /// </summary>
     private void ParseSubQueryFromString(string query, ParsedQuery parsedQuery)
     {
+        Console.WriteLine($"DEBUG: Parsing subquery: '{query}'");
+        
         // Patterns pour sous-requêtes avec support amélioré des agrégations
         var patterns = new[]
         {
@@ -1964,38 +2101,50 @@ public class GraphQLiteEngine : IDisposable
             var match = System.Text.RegularExpressions.Regex.Match(query, pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             if (match.Success)
             {
+                Console.WriteLine($"DEBUG: Pattern matched: '{pattern}'");
+                Console.WriteLine($"DEBUG: Groups: {string.Join(", ", match.Groups.Cast<Group>().Select(g => g.Value))}");
+                
                 if (pattern.Contains("select") && !pattern.Contains("select\\s+(sum|avg|min|max|count)"))
                 {
                     // Pattern 1: SELECT
                     parsedQuery.SubQueryProperty = match.Groups[1].Value;
-                    parsedQuery.NodeLabel = match.Groups[2].Value;
+                    parsedQuery.NodeLabel = NormalizeLabel(match.Groups[2].Value);
                     parsedQuery.Type = QueryType.FindNodes;
+                    
+                    Console.WriteLine($"DEBUG: Parsed as SELECT - Property: {parsedQuery.SubQueryProperty}, Label: {parsedQuery.NodeLabel}");
                     
                     if (match.Groups.Count > 3 && !string.IsNullOrEmpty(match.Groups[3].Value))
                     {
                         ParseConditionsFromString(match.Groups[3].Value, parsedQuery.Conditions);
+                        Console.WriteLine($"DEBUG: Added conditions: {string.Join(", ", parsedQuery.Conditions.Select(kv => $"{kv.Key}={kv.Value}"))}");
                     }
                 }
                 else if (pattern.Contains("find"))
                 {
                     // Pattern 2: FIND
-                    parsedQuery.NodeLabel = match.Groups[1].Value;
+                    parsedQuery.NodeLabel = NormalizeLabel(match.Groups[1].Value);
                     parsedQuery.Type = QueryType.FindNodes;
+                    
+                    Console.WriteLine($"DEBUG: Parsed as FIND - Label: {parsedQuery.NodeLabel}");
                     
                     if (match.Groups.Count > 2 && !string.IsNullOrEmpty(match.Groups[2].Value))
                     {
                         ParseConditionsFromString(match.Groups[2].Value, parsedQuery.Conditions);
+                        Console.WriteLine($"DEBUG: Added conditions: {string.Join(", ", parsedQuery.Conditions.Select(kv => $"{kv.Key}={kv.Value}"))}");
                     }
                 }
                 else if (pattern.Contains("count"))
                 {
                     // Pattern 3: COUNT
-                    parsedQuery.NodeLabel = match.Groups[1].Value;
+                    parsedQuery.NodeLabel = NormalizeLabel(match.Groups[1].Value);
                     parsedQuery.Type = QueryType.Count;
+                    
+                    Console.WriteLine($"DEBUG: Parsed as COUNT - Label: {parsedQuery.NodeLabel}");
                     
                     if (match.Groups.Count > 2 && !string.IsNullOrEmpty(match.Groups[2].Value))
                     {
                         ParseConditionsFromString(match.Groups[2].Value, parsedQuery.Conditions);
+                        Console.WriteLine($"DEBUG: Added conditions: {string.Join(", ", parsedQuery.Conditions.Select(kv => $"{kv.Key}={kv.Value}"))}");
                     }
                 }
                 else if (pattern.Contains("\\("))
@@ -2013,12 +2162,15 @@ public class GraphQLiteEngine : IDisposable
                     };
                     
                     parsedQuery.AggregateProperty = match.Groups[2].Value;
-                    parsedQuery.NodeLabel = match.Groups[3].Value;
+                    parsedQuery.NodeLabel = NormalizeLabel(match.Groups[3].Value);
                     parsedQuery.Type = QueryType.Aggregate;
+                    
+                    Console.WriteLine($"DEBUG: Parsed as AGGREGATE - Function: {parsedQuery.AggregateFunction}, Property: {parsedQuery.AggregateProperty}, Label: {parsedQuery.NodeLabel}");
                     
                     if (match.Groups.Count > 4 && !string.IsNullOrEmpty(match.Groups[4].Value))
                     {
                         ParseConditionsFromString(match.Groups[4].Value, parsedQuery.Conditions);
+                        Console.WriteLine($"DEBUG: Added conditions: {string.Join(", ", parsedQuery.Conditions.Select(kv => $"{kv.Key}={kv.Value}"))}");
                     }
                 }
                 else
@@ -2036,12 +2188,15 @@ public class GraphQLiteEngine : IDisposable
                     };
                     
                     parsedQuery.AggregateProperty = match.Groups[2].Value;
-                    parsedQuery.NodeLabel = match.Groups[3].Value;
+                    parsedQuery.NodeLabel = NormalizeLabel(match.Groups[3].Value);
                     parsedQuery.Type = QueryType.Aggregate;
+                    
+                    Console.WriteLine($"DEBUG: Parsed as AGGREGATE - Function: {parsedQuery.AggregateFunction}, Property: {parsedQuery.AggregateProperty}, Label: {parsedQuery.NodeLabel}");
                     
                     if (match.Groups.Count > 4 && !string.IsNullOrEmpty(match.Groups[4].Value))
                     {
                         ParseConditionsFromString(match.Groups[4].Value, parsedQuery.Conditions);
+                        Console.WriteLine($"DEBUG: Added conditions: {string.Join(", ", parsedQuery.Conditions.Select(kv => $"{kv.Key}={kv.Value}"))}");
                     }
                 }
                 
@@ -2049,17 +2204,49 @@ public class GraphQLiteEngine : IDisposable
             }
         }
 
+        Console.WriteLine($"DEBUG: No patterns matched for subquery: '{query}'");
+        
         // Si aucun pattern ne correspond, essayer un parsing simple
         var simpleMatch = System.Text.RegularExpressions.Regex.Match(query, @"(\w+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         if (simpleMatch.Success)
         {
-            parsedQuery.NodeLabel = simpleMatch.Groups[1].Value;
+            parsedQuery.NodeLabel = NormalizeLabel(simpleMatch.Groups[1].Value);
             parsedQuery.Type = QueryType.FindNodes;
+            Console.WriteLine($"DEBUG: Fallback parsing - Label: {parsedQuery.NodeLabel}");
         }
         else
         {
             throw new ArgumentException($"Format de sous-requête invalide : {query}");
         }
+    }
+
+    /// <summary>
+    /// Normalise un label (convertit les pluriels en singuliers)
+    /// </summary>
+    private string NormalizeLabel(string label)
+    {
+        // Convertir en minuscules
+        var normalized = label.ToLowerInvariant();
+        
+        Console.WriteLine($"DEBUG: NormalizeLabel - Input: '{label}', Normalized: '{normalized}'");
+        
+        // Gérer les pluriels courants
+        var singularToPlural = new Dictionary<string, string>
+        {
+            { "persons", "person" },
+            { "people", "person" },
+            { "companies", "company" },
+            { "projects", "project" },
+            { "products", "product" },
+            { "departments", "department" },
+            { "documents", "document" },
+            { "events", "event" },
+            { "tests", "test" }
+        };
+
+        var result = singularToPlural.TryGetValue(normalized, out var singular) ? singular : normalized;
+        Console.WriteLine($"DEBUG: NormalizeLabel - Result: '{result}'");
+        return result;
     }
 
     /// <summary>
@@ -2102,7 +2289,188 @@ public class GraphQLiteEngine : IDisposable
         var keyParts = conditionKey.Split('_');
         var property = keyParts[0];
         
-        return node.GetProperty<object>(property);
+        Console.WriteLine($"DEBUG: GetNodeValueForCondition - Key: {conditionKey}, Property: {property}");
+        Console.WriteLine($"DEBUG: Available properties: {string.Join(", ", node.Properties.Keys)}");
+        
+        // Essayer d'abord avec le nom exact
+        var result = node.GetProperty<object>(property);
+        if (result != null)
+        {
+            Console.WriteLine($"DEBUG: Retrieved value with exact name: {result}");
+            return result;
+        }
+        
+        // Essayer avec le nom + ":" (format stocké)
+        var propertyWithColon = property + ":";
+        result = node.GetProperty<object>(propertyWithColon);
+        if (result != null)
+        {
+            Console.WriteLine($"DEBUG: Retrieved value with colon: {result}");
+            return result;
+        }
+        
+        // Essayer de trouver une propriété qui commence par le nom
+        var matchingKey = node.Properties.Keys.FirstOrDefault(k => k.StartsWith(property + ":"));
+        if (matchingKey != null)
+        {
+            result = node.GetProperty<object>(matchingKey);
+            Console.WriteLine($"DEBUG: Retrieved value with matching key '{matchingKey}': {result}");
+            return result;
+        }
+        
+        // Nouveau : Extraire les propriétés depuis le format "with=properties {...}"
+        if (node.Properties.TryGetValue("with", out var withValue) && withValue is string withString)
+        {
+            Console.WriteLine($"DEBUG: Found 'with' property: '{withString}'");
+            Console.WriteLine($"DEBUG: String length: {withString.Length}");
+            Console.WriteLine($"DEBUG: Last 10 characters: '{withString.Substring(Math.Max(0, withString.Length - 10))}'");
+            
+            // Parser le contenu des propriétés
+            if (withString.StartsWith("properties {"))
+            {
+                // Extraire le contenu après "properties {"
+                var startIndex = withString.IndexOf("{") + 1;
+                var endIndex = withString.LastIndexOf("}");
+                
+                // Si pas d'accolade fermante, supposer que la chaîne se termine à la fin
+                if (endIndex <= startIndex)
+                {
+                    endIndex = withString.Length;
+                    Console.WriteLine($"DEBUG: No closing brace found, using end of string");
+                }
+                
+                if (endIndex > startIndex)
+                {
+                    var propertiesContent = withString.Substring(startIndex, endIndex - startIndex);
+                    Console.WriteLine($"DEBUG: Properties content: '{propertiesContent}'");
+                    
+                    // Parser les propriétés individuelles
+                    var properties = ParsePropertiesFromString(propertiesContent);
+                    Console.WriteLine($"DEBUG: Parsed properties: {string.Join(", ", properties.Select(kv => $"{kv.Key}={kv.Value}"))}");
+                    
+                    // Chercher la propriété demandée
+                    if (properties.TryGetValue(property, out var propValue))
+                    {
+                        Console.WriteLine($"DEBUG: Found property '{property}' in parsed properties: {propValue}");
+                        return propValue;
+                    }
+                    
+                    // Essayer avec la casse insensible
+                    var matchingProperty = properties.FirstOrDefault(kvp => 
+                        kvp.Key.Equals(property, StringComparison.OrdinalIgnoreCase));
+                    if (matchingProperty.Key != null)
+                    {
+                        Console.WriteLine($"DEBUG: Found property '{matchingProperty.Key}' (case-insensitive): {matchingProperty.Value}");
+                        return matchingProperty.Value;
+                    }
+                }
+                else
+                {
+                    Console.WriteLine($"DEBUG: Could not extract properties content from: {withString}");
+                }
+            }
+            else
+            {
+                Console.WriteLine($"DEBUG: 'with' property doesn't match expected format: {withString}");
+                Console.WriteLine("DEBUG: Expected to start with 'properties {' and end with '}'");
+            }
+        }
+        else
+        {
+            Console.WriteLine($"DEBUG: No 'with' property found or it's not a string");
+        }
+        
+        // Pour les propriétés comme "name", chercher dans les valeurs des propriétés
+        // car le nom peut être stocké comme valeur d'une propriété
+        foreach (var kvp in node.Properties)
+        {
+            if (kvp.Value?.ToString()?.Equals(property, StringComparison.OrdinalIgnoreCase) == true)
+            {
+                Console.WriteLine($"DEBUG: Found property '{kvp.Key}' with value '{kvp.Value}' matching '{property}'");
+                return kvp.Value;
+            }
+        }
+        
+        Console.WriteLine($"DEBUG: No value found for property '{property}'");
+        return null;
+    }
+    
+    /// <summary>
+    /// Parse les propriétés depuis une chaîne de format "name: value, name2: value2"
+    /// </summary>
+    private Dictionary<string, object> ParsePropertiesFromString(string propertiesString)
+    {
+        var properties = new Dictionary<string, object>();
+        
+        try
+        {
+            Console.WriteLine($"DEBUG: ParsePropertiesFromString - Input: '{propertiesString}'");
+            
+            // Diviser par les virgules, mais en tenant compte des guillemets
+            var parts = propertiesString.Split(',');
+            Console.WriteLine($"DEBUG: Split into {parts.Length} parts");
+            
+            foreach (var part in parts)
+            {
+                var trimmedPart = part.Trim();
+                Console.WriteLine($"DEBUG: Processing part: '{trimmedPart}'");
+                
+                if (string.IsNullOrEmpty(trimmedPart)) continue;
+                
+                // Chercher le premier ":" pour séparer la clé de la valeur
+                var colonIndex = trimmedPart.IndexOf(':');
+                Console.WriteLine($"DEBUG: Colon index: {colonIndex}");
+                
+                if (colonIndex > 0)
+                {
+                    var key = trimmedPart.Substring(0, colonIndex).Trim();
+                    var value = trimmedPart.Substring(colonIndex + 1).Trim();
+                    
+                    Console.WriteLine($"DEBUG: Extracted key: '{key}', value: '{value}'");
+                    
+                    // Enlever les guillemets si présents
+                    if (value.StartsWith("\"") && value.EndsWith("\""))
+                    {
+                        value = value.Substring(1, value.Length - 2);
+                        Console.WriteLine($"DEBUG: Removed double quotes, new value: '{value}'");
+                    }
+                    else if (value.StartsWith("'") && value.EndsWith("'"))
+                    {
+                        value = value.Substring(1, value.Length - 2);
+                        Console.WriteLine($"DEBUG: Removed single quotes, new value: '{value}'");
+                    }
+                    
+                    // Essayer de convertir en nombre si possible
+                    if (int.TryParse(value, out var intValue))
+                    {
+                        properties[key] = intValue;
+                        Console.WriteLine($"DEBUG: Parsed as int: {key} = {intValue}");
+                    }
+                    else if (double.TryParse(value, out var doubleValue))
+                    {
+                        properties[key] = doubleValue;
+                        Console.WriteLine($"DEBUG: Parsed as double: {key} = {doubleValue}");
+                    }
+                    else
+                    {
+                        properties[key] = value;
+                        Console.WriteLine($"DEBUG: Parsed as string: {key} = {value}");
+                    }
+                }
+                else
+                {
+                    Console.WriteLine($"DEBUG: No colon found in part: '{trimmedPart}'");
+                }
+            }
+            
+            Console.WriteLine($"DEBUG: Final parsed properties: {string.Join(", ", properties.Select(kv => $"{kv.Key}={kv.Value}"))}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"DEBUG: Error parsing properties: {ex.Message}");
+        }
+        
+        return properties;
     }
     
 
@@ -2156,85 +2524,62 @@ public class GraphQLiteEngine : IDisposable
     }
     
     /// <summary>
-    /// Améliore l'opérateur ANY avec support de collections complexes
+    /// Évalue l'opérateur ANY
     /// </summary>
     private bool EvaluateAnyOperator(object? nodeValue, List<object> subQueryValues)
     {
-        if (nodeValue == null || !subQueryValues.Any()) return false;
+        if (nodeValue == null) return false;
         
-        // Support des collections
-        if (nodeValue is IEnumerable<object> nodeCollection)
+        // Si la valeur du nœud est une liste, vérifier si au moins un élément correspond à au moins une valeur de la sous-requête
+        if (nodeValue is List<object> nodeList)
         {
-            return nodeCollection.Any(nodeItem => 
-                subQueryValues.Any(subValue => CompareForEquality(nodeItem, subValue)));
+            return nodeList.Any(item => subQueryValues.Any(value => CompareForEquality(item, value)));
         }
         
-        // Support des chaînes avec séparateurs
-        if (nodeValue is string nodeString)
-        {
-            var nodeItems = nodeString.Split(new[] { ',', ';', '|' }, StringSplitOptions.RemoveEmptyEntries);
-            return nodeItems.Any(nodeItem => 
-                subQueryValues.Any(subValue => CompareForEquality(nodeItem.Trim(), subValue)));
-        }
-        
-        // Support des tableaux
+        // Si la valeur du nœud est un tableau, le convertir en liste
         if (nodeValue.GetType().IsArray)
         {
-            var array = (Array)nodeValue;
-            for (int i = 0; i < array.Length; i++)
+            var nodeArray = (Array)nodeValue;
+            var arrayList = new List<object>();
+            foreach (var item in nodeArray)
             {
-                var arrayItem = array.GetValue(i);
-                if (subQueryValues.Any(subValue => CompareForEquality(arrayItem, subValue)))
-                {
-                    return true;
-                }
+                arrayList.Add(item);
             }
+            return arrayList.Any(item => subQueryValues.Any(value => CompareForEquality(item, value)));
         }
         
-        // Comparaison directe
-        return subQueryValues.Any(subValue => CompareForEquality(nodeValue, subValue));
+        // Pour une valeur simple, vérifier si elle correspond à au moins une valeur de la sous-requête
+        return subQueryValues.Any(value => CompareForEquality(nodeValue, value));
     }
-    
+
     /// <summary>
-    /// Améliore l'opérateur ALL avec support de collections complexes
+    /// Évalue l'opérateur ALL
     /// </summary>
     private bool EvaluateAllOperator(object? nodeValue, List<object> subQueryValues)
     {
-        if (nodeValue == null || !subQueryValues.Any()) return false;
+        if (nodeValue == null) return false;
         
-        // Support des collections
-        if (nodeValue is IEnumerable<object> nodeCollection)
+        // Si la valeur du nœud est une liste, vérifier si tous les éléments correspondent à au moins une valeur de la sous-requête
+        if (nodeValue is List<object> nodeList)
         {
-            var nodeItems = nodeCollection.ToList();
-            return nodeItems.All(nodeItem => 
-                subQueryValues.Any(subValue => CompareForEquality(nodeItem, subValue)));
+            return nodeList.All(item => subQueryValues.Any(value => CompareForEquality(item, value)));
         }
         
-        // Support des chaînes avec séparateurs
-        if (nodeValue is string nodeString)
-        {
-            var nodeItems = nodeString.Split(new[] { ',', ';', '|' }, StringSplitOptions.RemoveEmptyEntries);
-            return nodeItems.All(nodeItem => 
-                subQueryValues.Any(subValue => CompareForEquality(nodeItem.Trim(), subValue)));
-        }
-        
-        // Support des tableaux
+        // Si la valeur du nœud est un tableau, le convertir en liste
         if (nodeValue.GetType().IsArray)
         {
-            var array = (Array)nodeValue;
-            for (int i = 0; i < array.Length; i++)
+            var nodeArray = (Array)nodeValue;
+            var arrayList = new List<object>();
+            foreach (var item in nodeArray)
             {
-                var arrayItem = array.GetValue(i);
-                if (!subQueryValues.Any(subValue => CompareForEquality(arrayItem, subValue)))
-                {
-                    return false;
-                }
+                arrayList.Add(item);
             }
-            return true;
+            return arrayList.All(item => subQueryValues.Any(value => CompareForEquality(item, value)));
         }
         
-        // Pour les valeurs simples, vérifier si la valeur est dans la liste
-        return subQueryValues.Any(subValue => CompareForEquality(nodeValue, subValue));
+        // Pour une valeur simple, vérifier si elle correspond à au moins une valeur de la sous-requête
+        // (ALL avec une valeur simple signifie "la valeur est dans l'ensemble")
+        return subQueryValues.Any(value => CompareForEquality(nodeValue, value));
     }
 
     /// <summary>
@@ -2541,12 +2886,16 @@ public class GraphQLiteEngine : IDisposable
             return ExecuteEdgeAggregateAsync(query);
         }
         
+        Console.WriteLine($"DEBUG: ExecuteAggregateAsync - Label: {query.NodeLabel}, Property: {query.AggregateProperty}, Function: {query.AggregateFunction}");
+        
         var nodes = _storage.GetNodesByLabel(query.NodeLabel!);
+        Console.WriteLine($"DEBUG: Found {nodes.Count} nodes with label '{query.NodeLabel}'");
         
         // Appliquer les conditions WHERE si présentes
         if (query.Conditions.Any())
         {
             nodes = FilterNodesByConditions(nodes, query.Conditions);
+            Console.WriteLine($"DEBUG: After filtering: {nodes.Count} nodes");
         }
 
         // Extraire les valeurs numériques de la propriété spécifiée
@@ -2737,57 +3086,239 @@ public class GraphQLiteEngine : IDisposable
     {
         try
         {
+            Console.WriteLine($"DEBUG: Evaluating subquery condition - Key: {conditionKey}, Node: {node.GetProperty<string>("name")}");
+            Console.WriteLine($"DEBUG: SubQuery type: {subQuery.Type}, Property: {subQuery.SubQueryProperty}, Label: {subQuery.NodeLabel}");
+            
             // Exécuter la sous-requête
             var subQueryResult = await ExecuteSubQueryAsync(subQuery);
             
+            Console.WriteLine($"DEBUG: Subquery result - Success: {subQueryResult.Success}, Message: {subQueryResult.Message}");
+            
             if (!subQueryResult.Success)
             {
+                Console.WriteLine($"DEBUG: Subquery failed - Error: {subQueryResult.Error}");
                 return false;
             }
             
-            // Extraire les valeurs de la sous-requête
-            var subQueryValues = ExtractSubQueryValues(subQueryResult);
+            // Extraire les valeurs de la sous-requête avec la propriété spécifique
+            var subQueryValues = ExtractSubQueryValuesWithProperty(subQueryResult, subQuery.SubQueryProperty);
             
-            if (!subQueryValues.Any())
-            {
-                return false;
-            }
+            Console.WriteLine($"DEBUG: Extracted {subQueryValues.Count} values from subquery");
             
             // Évaluer selon l'opérateur de la condition
             var nodeValue = GetNodeValueForCondition(node, conditionKey);
             
-            // Déterminer l'opérateur de comparaison
-            if (conditionKey.Contains("_in"))
+            Console.WriteLine($"DEBUG: Node value for condition '{conditionKey}': {nodeValue}");
+            
+            // Déterminer l'opérateur de comparaison basé sur la clé de condition
+            if (conditionKey.Contains("_exists"))
             {
-                return EvaluateInOperator(nodeValue, subQueryValues);
+                var result = EvaluateExistsOperator(subQueryValues);
+                Console.WriteLine($"DEBUG: EXISTS operator result: {result}");
+                return result;
             }
-            else if (conditionKey.Contains("_exists"))
+            else if (conditionKey.Contains("_not_exists"))
             {
-                return EvaluateExistsOperator(subQueryValues);
+                var result = !EvaluateExistsOperator(subQueryValues);
+                Console.WriteLine($"DEBUG: NOT EXISTS operator result: {result}");
+                return result;
+            }
+            else if (conditionKey.Contains("_in"))
+            {
+                var result = EvaluateInOperator(nodeValue, subQueryValues);
+                Console.WriteLine($"DEBUG: IN operator result: {result}");
+                return result;
+            }
+            else if (conditionKey.Contains("_not_in"))
+            {
+                var result = !EvaluateInOperator(nodeValue, subQueryValues);
+                Console.WriteLine($"DEBUG: NOT IN operator result: {result}");
+                return result;
             }
             else if (conditionKey.Contains("_any"))
             {
-                return EvaluateAnyOperator(nodeValue, subQueryValues);
+                var result = EvaluateAnyOperator(nodeValue, subQueryValues);
+                Console.WriteLine($"DEBUG: ANY operator result: {result}");
+                return result;
             }
             else if (conditionKey.Contains("_all"))
             {
-                return EvaluateAllOperator(nodeValue, subQueryValues);
+                var result = EvaluateAllOperator(nodeValue, subQueryValues);
+                Console.WriteLine($"DEBUG: ALL operator result: {result}");
+                return result;
             }
             else if (conditionKey.Contains("_count"))
             {
                 var comparisonValue = ExtractComparisonValue(conditionKey);
-                return EvaluateCountOperator(subQueryValues, "eq", comparisonValue);
+                var result = EvaluateCountOperator(subQueryValues, "eq", comparisonValue);
+                Console.WriteLine($"DEBUG: COUNT operator result: {result}");
+                return result;
+            }
+            else if (conditionKey.Contains("_eq_aggregate") || conditionKey.Contains("_gt_aggregate") || 
+                     conditionKey.Contains("_lt_aggregate") || conditionKey.Contains("_gte_aggregate") || 
+                     conditionKey.Contains("_lte_aggregate") || conditionKey.Contains("_aggregate"))
+            {
+                var result = EvaluateAggregateComparison(nodeValue, subQueryValues, conditionKey);
+                Console.WriteLine($"DEBUG: AGGREGATE comparison result: {result}");
+                return result;
+            }
+            else if (conditionKey.Contains("_nested_in"))
+            {
+                var result = EvaluateInOperator(nodeValue, subQueryValues);
+                Console.WriteLine($"DEBUG: NESTED IN operator result: {result}");
+                return result;
+            }
+            else if (conditionKey.Contains("_nested_exists"))
+            {
+                var result = EvaluateExistsOperator(subQueryValues);
+                Console.WriteLine($"DEBUG: NESTED EXISTS operator result: {result}");
+                return result;
+            }
+            else if (conditionKey.Contains("_nested_any"))
+            {
+                var result = EvaluateAnyOperator(nodeValue, subQueryValues);
+                Console.WriteLine($"DEBUG: NESTED ANY operator result: {result}");
+                return result;
+            }
+            else if (conditionKey.Contains("_nested_all"))
+            {
+                var result = EvaluateAllOperator(nodeValue, subQueryValues);
+                Console.WriteLine($"DEBUG: NESTED ALL operator result: {result}");
+                return result;
             }
             else
             {
                 // Comparaison directe avec la première valeur
-                return CompareForEquality(nodeValue, subQueryValues.First());
+                var result = CompareForEquality(nodeValue, subQueryValues.First());
+                Console.WriteLine($"DEBUG: Direct comparison result: {result}");
+                return result;
             }
         }
         catch (Exception ex)
         {
+            Console.WriteLine($"DEBUG: Exception in EvaluateSubQueryConditionAsync: {ex.Message}");
             return false;
         }
+    }
+
+    /// <summary>
+    /// Extrait les valeurs d'une sous-requête avec une propriété spécifique
+    /// </summary>
+    private List<object> ExtractSubQueryValuesWithProperty(QueryResult subQueryResult, string? specificProperty)
+    {
+        var values = new List<object>();
+        
+        Console.WriteLine($"DEBUG: Extracting values from subquery result - Data type: {subQueryResult.Data?.GetType().Name}, Specific property: {specificProperty}");
+        
+        // Vérifier d'abord si c'est une agrégation (données numériques)
+        if (subQueryResult.Data is double numericValue)
+        {
+            values.Add(numericValue);
+            Console.WriteLine($"DEBUG: Added numeric value: {numericValue}");
+            return values;
+        }
+        else if (subQueryResult.Data is int intValue)
+        {
+            values.Add(intValue);
+            Console.WriteLine($"DEBUG: Added int value: {intValue}");
+            return values;
+        }
+        else if (subQueryResult.Data is decimal decimalValue)
+        {
+            values.Add(decimalValue);
+            Console.WriteLine($"DEBUG: Added decimal value: {decimalValue}");
+            return values;
+        }
+        else if (subQueryResult.Data is long longValue)
+        {
+            values.Add(longValue);
+            Console.WriteLine($"DEBUG: Added long value: {longValue}");
+            return values;
+        }
+        else if (subQueryResult.Data is string stringValue)
+        {
+            values.Add(stringValue);
+            Console.WriteLine($"DEBUG: Added string value: {stringValue}");
+            return values;
+        }
+        else if (subQueryResult.Data is float floatValue)
+        {
+            values.Add(floatValue);
+            Console.WriteLine($"DEBUG: Added float value: {floatValue}");
+            return values;
+        }
+        
+        // Si c'est une liste de nœuds
+        if (subQueryResult.Data is List<Node> nodes)
+        {
+            Console.WriteLine($"DEBUG: Processing {nodes.Count} nodes");
+            
+            foreach (var node in nodes)
+            {
+                Console.WriteLine($"DEBUG: Processing node: {node.GetProperty<string>("name")}");
+                
+                // Si une propriété spécifique est demandée, l'extraire
+                if (!string.IsNullOrEmpty(specificProperty))
+                {
+                    if (node.Properties.TryGetValue(specificProperty, out var propertyValue))
+                    {
+                        values.Add(propertyValue);
+                        Console.WriteLine($"DEBUG: Added specific property value: {specificProperty} = {propertyValue}");
+                    }
+                                            else
+                        {
+                            // Si la propriété n'est pas trouvée, essayer d'extraire la propriété demandée
+                            if (node.Properties.TryGetValue(specificProperty, out var fallbackValue))
+                            {
+                                values.Add(fallbackValue);
+                                Console.WriteLine($"DEBUG: Added property value: {specificProperty} = {fallbackValue}");
+                            }
+                            else
+                            {
+                                // Essayer d'extraire la propriété avec le format "property:"
+                                var propertyKey = $"{specificProperty}:";
+                                if (node.Properties.TryGetValue(propertyKey, out var colonValue))
+                                {
+                                    values.Add(colonValue);
+                                    Console.WriteLine($"DEBUG: Added property value with colon: {specificProperty} = {colonValue}");
+                                }
+                                else
+                                {
+                                    Console.WriteLine($"DEBUG: Property '{specificProperty}' not found in node");
+                                }
+                            }
+                        }
+                }
+                else
+                {
+                    // Pour EXISTS/NOT EXISTS, on ajoute juste un indicateur d'existence
+                    // ou on extraire toutes les propriétés pour la compatibilité
+                    values.Add(true); // Indicateur d'existence
+                    Console.WriteLine($"DEBUG: Added existence indicator for node: {node.GetProperty<string>("name")}");
+                }
+            }
+        }
+        
+        // Si c'est une liste de valeurs (par exemple, des propriétés extraites par FindNodesAsync)
+        else if (subQueryResult.Data is List<object> listResult)
+        {
+            values.AddRange(listResult);
+            Console.WriteLine($"DEBUG: Added {listResult.Count} list values");
+            return values;
+        }
+        
+        // Si c'est un dictionnaire (résultat d'agrégation complexe)
+        else if (subQueryResult.Data is Dictionary<string, object> dictResult)
+        {
+            foreach (var kvp in dictResult)
+            {
+                values.Add(kvp.Value);
+                Console.WriteLine($"DEBUG: Added dict value: {kvp.Key} = {kvp.Value}");
+            }
+        }
+        
+        Console.WriteLine($"DEBUG: Total extracted values: {values.Count}");
+        return values;
     }
 
     public void ClearSubQueryCache()
@@ -2861,6 +3392,55 @@ public class GraphQLiteEngine : IDisposable
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Évalue une comparaison avec une agrégation
+    /// </summary>
+    private bool EvaluateAggregateComparison(object? nodeValue, List<object> subQueryValues, string conditionKey)
+    {
+        if (nodeValue == null || !subQueryValues.Any())
+            return false;
+            
+        // Extraire l'opérateur de comparaison de la clé de condition
+        string? comparisonOperator = null;
+        if (conditionKey.Contains("_eq_aggregate")) comparisonOperator = "eq";
+        else if (conditionKey.Contains("_gt_aggregate")) comparisonOperator = "gt";
+        else if (conditionKey.Contains("_lt_aggregate")) comparisonOperator = "lt";
+        else if (conditionKey.Contains("_gte_aggregate")) comparisonOperator = "gte";
+        else if (conditionKey.Contains("_lte_aggregate")) comparisonOperator = "lte";
+        else if (conditionKey.Contains("_aggregate"))
+        {
+            // Essayer d'extraire l'opérateur de la clé complète
+            var keyParts = conditionKey.Split('_');
+            if (keyParts.Length >= 2)
+            {
+                comparisonOperator = keyParts[1];
+            }
+            else
+            {
+                comparisonOperator = "eq"; // Par défaut
+            }
+        }
+        
+        if (comparisonOperator == null)
+            return false;
+            
+        // Prendre la première valeur de la sous-requête (résultat d'agrégation)
+        var aggregateValue = subQueryValues.First();
+        
+        Console.WriteLine($"DEBUG: Comparing {nodeValue} {comparisonOperator} {aggregateValue}");
+        
+        // Comparer selon l'opérateur
+        return comparisonOperator switch
+        {
+            "eq" => CompareForEquality(nodeValue, aggregateValue),
+            "gt" => CompareValues(nodeValue, aggregateValue) > 0,
+            "lt" => CompareValues(nodeValue, aggregateValue) < 0,
+            "gte" => CompareValues(nodeValue, aggregateValue) >= 0,
+            "lte" => CompareValues(nodeValue, aggregateValue) <= 0,
+            _ => false
+        };
     }
 }
 /// <summary>

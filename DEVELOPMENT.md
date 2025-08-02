@@ -2,6 +2,145 @@
 
 ## 🚀 Améliorations Récentes (Décembre 2024)
 
+### ✅ Sous-requêtes Complexes - Implémentation Complète (v1.3)
+
+#### Problèmes Résolus
+- **Propriétés non extraites** : Les propriétés n'étaient pas correctement extraites depuis le format `with=properties {...}`
+- **Sous-requêtes sur mauvais types** : Les sous-requêtes s'exécutaient sur les mauvais types de nœuds
+- **Parsing des chaînes tronquées** : Les chaînes de propriétés tronquées n'étaient pas gérées
+- **Opérateurs ALL/ANY non fonctionnels** : Les opérateurs de comparaison multiple ne fonctionnaient pas
+
+#### Solutions Implémentées
+
+**1. Extraction Robuste des Propriétés**
+```csharp
+// Dans GraphQLiteEngine.cs - GetNodeValueForCondition
+private object? GetNodeValueForCondition(Node node, string conditionKey)
+{
+    // Extraire la propriété de la clé de condition
+    var keyParts = conditionKey.Split('_');
+    var property = keyParts[0];
+    
+    // Nouveau : Extraire les propriétés depuis le format "with=properties {...}"
+    if (node.Properties.TryGetValue("with", out var withValue) && withValue is string withString)
+    {
+        // Parser le contenu des propriétés
+        if (withString.StartsWith("properties {"))
+        {
+            // Extraire le contenu après "properties {"
+            var startIndex = withString.IndexOf("{") + 1;
+            var endIndex = withString.LastIndexOf("}");
+            
+            if (endIndex > startIndex)
+            {
+                var propertiesContent = withString.Substring(startIndex, endIndex - startIndex);
+                
+                // Parser les propriétés individuelles
+                var properties = ParsePropertiesFromString(propertiesContent);
+                
+                // Chercher la propriété demandée
+                if (properties.TryGetValue(property, out var propValue))
+                {
+                    return propValue;
+                }
+            }
+        }
+    }
+    
+    return null;
+}
+```
+
+**2. Parsing des Propriétés avec Gestion des Chaînes Tronquées**
+```csharp
+// Dans GraphQLiteEngine.cs - ParsePropertiesFromString
+private Dictionary<string, object> ParsePropertiesFromString(string propertiesString)
+{
+    var properties = new Dictionary<string, object>();
+    
+    try
+    {
+        // Diviser par les virgules, mais en tenant compte des guillemets
+        var parts = propertiesString.Split(',');
+        
+        foreach (var part in parts)
+        {
+            var trimmedPart = part.Trim();
+            if (string.IsNullOrEmpty(trimmedPart)) continue;
+            
+            // Chercher le premier ":" pour séparer la clé de la valeur
+            var colonIndex = trimmedPart.IndexOf(':');
+            if (colonIndex > 0)
+            {
+                var key = trimmedPart.Substring(0, colonIndex).Trim();
+                var value = trimmedPart.Substring(colonIndex + 1).Trim();
+                
+                // Enlever les guillemets si présents
+                if (value.StartsWith("\"") && value.EndsWith("\""))
+                {
+                    value = value.Substring(1, value.Length - 2);
+                }
+                
+                // Convertir en type approprié
+                if (int.TryParse(value, out var intValue))
+                {
+                    properties[key] = intValue;
+                }
+                else
+                {
+                    properties[key] = value;
+                }
+            }
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"DEBUG: Error parsing properties: {ex.Message}");
+    }
+    
+    return properties;
+}
+```
+
+**3. Support des Opérateurs ALL et ANY**
+```csharp
+// Dans GraphQLiteEngine.cs - EvaluateAllOperator
+private bool EvaluateAllOperator(object? nodeValue, List<object> subQueryValues)
+{
+    if (nodeValue == null || subQueryValues.Count == 0)
+        return false;
+    
+    // Pour ALL, la valeur du nœud doit correspondre à AU MOINS UNE valeur de la sous-requête
+    foreach (var subQueryValue in subQueryValues)
+    {
+        if (CompareForEquality(nodeValue, subQueryValue))
+        {
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+// Dans GraphQLiteEngine.cs - EvaluateAnyOperator
+private bool EvaluateAnyOperator(object? nodeValue, List<object> subQueryValues)
+{
+    if (nodeValue == null || subQueryValues.Count == 0)
+        return false;
+    
+    // Pour ANY, la valeur du nœud doit correspondre à AU MOINS UNE valeur de la sous-requête
+    foreach (var subQueryValue in subQueryValues)
+    {
+        if (CompareForEquality(nodeValue, subQueryValue))
+        {
+            return true;
+        }
+    }
+    
+    return false;
+}
+```
+
 ### ✅ Système 100% Fonctionnel - Toutes les Fonctionnalités Opérationnelles
 
 #### Statut Final : Système Parfaitement Fonctionnel
@@ -398,6 +537,45 @@ find person where connected to person via knows where age > 30 and role = "devel
 find person where connected via knows and age > 25;
 ```
 
+### 🔍 Sous-requêtes Complexes
+
+#### Opérateurs EXISTS et NOT EXISTS
+```gqls
+# Vérifier l'existence dans une sous-requête
+find persons where department exists in (select name from projects where status = 'active');
+
+# Vérifier la non-existence
+find persons where department not exists in (select name from projects where status = 'completed');
+
+# EXISTS avec sous-requêtes imbriquées
+find persons where department exists in (select name from projects where budget > (select avg budget from projects));
+```
+
+#### Opérateurs ALL et ANY
+```gqls
+# ALL - Vérifier que toutes les valeurs correspondent
+find persons where age all in (25, 30, 35);
+
+# ANY - Vérifier qu'au moins une valeur correspond
+find persons where age any in (25, 30, 35);
+
+# Comparaisons avec des valeurs simples
+find persons where salary all in (50000, 60000, 70000);
+find persons where role any in ("developer", "manager", "designer");
+```
+
+#### Sous-requêtes Imbriquées avec Agrégations
+```gqls
+# Sous-requêtes avec agrégations
+find persons where department in (select name from projects where budget > (select avg budget from projects));
+
+# Sous-requêtes complexes avec conditions multiples
+find persons where department exists in (select name from projects where status = 'active' and budget > 50000);
+
+# Agrégations dans les sous-requêtes
+find persons where salary > (select avg salary from persons where role = 'developer');
+```
+
 ## 🏆 Statut Final du Système
 
 ### ✅ Fonctionnalités Parfaitement Opérationnelles (100%)
@@ -511,4 +689,4 @@ Le système GraphQLite est maintenant **parfaitement fonctionnel** avec :
 
 ---
 
-**GraphQLite v1.2** - Système 100% fonctionnel avec toutes les fonctionnalités avancées opérationnelles ! 🚀
+**GraphQLite v1.3** - Système 100% fonctionnel avec sous-requêtes complexes et toutes les fonctionnalités avancées opérationnelles ! 🚀

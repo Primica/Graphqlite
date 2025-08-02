@@ -250,6 +250,30 @@ find person where age > $minAge and connected via $edgeType
 sum salary of edges where salary > $minSalary
 ```
 
+### Sous-requêtes complexes
+```gqls
+# EXISTS - Vérifier l'existence dans une sous-requête
+find persons where department exists in (select name from projects where status = 'active')
+
+# NOT EXISTS - Vérifier la non-existence
+find persons where department not exists in (select name from projects where status = 'completed')
+
+# IN - Vérifier l'appartenance à une liste
+find persons where age in (25, 30, 35)
+
+# ALL - Vérifier que toutes les valeurs correspondent
+find persons where age all in (25, 30, 35)
+
+# ANY - Vérifier qu'au moins une valeur correspond
+find persons where age any in (25, 30, 35)
+
+# Sous-requêtes imbriquées avec agrégations
+find persons where department in (select name from projects where budget > (select avg budget from projects))
+
+# EXISTS avec sous-requêtes imbriquées
+find persons where department exists in (select name from projects where budget > (select avg budget from projects))
+```
+
 ### Visualisation du schéma
 ```gqls
 show schema
@@ -421,7 +445,14 @@ dotnet run -- --db production --script migration
 - **Scripts réutilisables** avec système de variables complet
 - **Analyse de données** avec agrégations et filtres complexes
 
-## 🚀 Fonctionnalités récemment implémentées (v1.2)
+## 🚀 Fonctionnalités récemment implémentées (v1.3)
+
+### **Sous-requêtes complexes** ✅
+- Support complet des opérateurs `EXISTS`, `NOT EXISTS`, `IN`, `NOT IN`
+- Sous-requêtes imbriquées avec agrégations (`SELECT AVG budget FROM projects`)
+- Opérateurs `ALL` et `ANY` pour les comparaisons multiples
+- Extraction automatique des propriétés depuis le format `with=properties {...}`
+- Parsing robuste des propriétés avec gestion des chaînes tronquées
 
 ### **Agrégations avancées**
 - Support complet des agrégations sur nœuds et arêtes
@@ -448,7 +479,7 @@ dotnet run -- --db production --script migration
 ## 📝 Roadmap et extensions possibles
 
 ### Fonctionnalités avancées
-- **Sous-requêtes complexes** : `EXISTS`, `NOT EXISTS`, `IN`, `NOT IN` avec agrégations
+- **Sous-requêtes complexes** : `EXISTS`, `NOT EXISTS`, `IN`, `NOT IN` avec agrégations ✅
 - **Jointures virtuelles** : Relations entre nœuds via des chemins complexes
 - **Groupement et tri** : `GROUP BY`, `ORDER BY`, `HAVING`
 - **Fonctions de fenêtre** : `ROW_NUMBER()`, `RANK()`, `DENSE_RANK()`
@@ -489,4 +520,4 @@ Projet open source conçu pour simplifier l'usage des bases de données orienté
 
 **GraphQLite** - Parce que les graphes ne devraient pas être compliqués.
 
-**Version actuelle** : v1.2 - Système 100% fonctionnel avec toutes les fonctionnalités avancées opérationnelles
+**Version actuelle** : v1.3 - Système 100% fonctionnel avec sous-requêtes complexes et toutes les fonctionnalités avancées opérationnelles

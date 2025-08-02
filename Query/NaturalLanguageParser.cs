@@ -263,12 +263,12 @@ public class NaturalLanguageParser
         // IMPORTANT: L'ordre est crucial - les patterns plus spécifiques doivent être en premier
         var patterns = new[]
         {
-            // Pattern 2 : "create [label] ""name"" [properties]" (AVANT Pattern 1)
+            // Pattern 1 : "create [label] with [properties]" (format avec "with")
+            @"create\s+(\w+)\s+with\s+(.+)",
+            // Pattern 2 : "create [label] ""name"" [properties]" (format avec guillemets)
             @"create\s+(\w+)\s+""([^""]+)""(?:\s+(.+))?",
-            // Pattern 3 : "create [label] [name] [properties]"
+            // Pattern 3 : "create [label] [name] [properties]" (format simple)
             @"create\s+(\w+)\s+([^\s]+(?:\s+[^\s]+)*)(?:\s+(.+))?"
-            // Pattern 1 temporairement désactivé : "create [label] with [properties]"
-            // @"create\s+(\w+)\s+with\s+(?!"")(.+)",
         };
 
         for (int patternIndex = 0; patternIndex < patterns.Length; patternIndex++)
@@ -279,30 +279,30 @@ public class NaturalLanguageParser
             {
                 parsedQuery.NodeLabel = match.Groups[1].Value;
                 
-                if (patternIndex == 0) // Pattern 2 : avec guillemets
-                {
-                    parsedQuery.Properties["name"] = match.Groups[2].Value;
-                    
-                    var propertiesText = match.Groups.Count > 3 ? match.Groups[3].Value.Trim() : "";
-                    if (!string.IsNullOrEmpty(propertiesText))
-                    {
-                        ParseDynamicProperties(propertiesText, parsedQuery.Properties);
-                    }
-                }
-                else if (patternIndex == 1) // Pattern 3 : sans guillemets
-                {
-                    parsedQuery.Properties["name"] = match.Groups[2].Value;
-                    
-                    var propertiesText = match.Groups.Count > 3 ? match.Groups[3].Value.Trim() : "";
-                    if (!string.IsNullOrEmpty(propertiesText))
-                    {
-                        ParseDynamicProperties(propertiesText, parsedQuery.Properties);
-                    }
-                }
-                else // Pattern 1 : avec "with"
+                if (patternIndex == 0) // Pattern 1 : avec "with"
                 {
                     var propertiesText = match.Groups[2].Value.Trim();
                     ParseDynamicProperties(propertiesText, parsedQuery.Properties);
+                }
+                else if (patternIndex == 1) // Pattern 2 : avec guillemets
+                {
+                    parsedQuery.Properties["name"] = match.Groups[2].Value;
+                    
+                    var propertiesText = match.Groups.Count > 3 ? match.Groups[3].Value.Trim() : "";
+                    if (!string.IsNullOrEmpty(propertiesText))
+                    {
+                        ParseDynamicProperties(propertiesText, parsedQuery.Properties);
+                    }
+                }
+                else if (patternIndex == 2) // Pattern 3 : sans guillemets
+                {
+                    parsedQuery.Properties["name"] = match.Groups[2].Value;
+                    
+                    var propertiesText = match.Groups.Count > 3 ? match.Groups[3].Value.Trim() : "";
+                    if (!string.IsNullOrEmpty(propertiesText))
+                    {
+                        ParseDynamicProperties(propertiesText, parsedQuery.Properties);
+                    }
                 }
                 return;
             }
@@ -2205,43 +2205,180 @@ public class NaturalLanguageParser
         if (string.IsNullOrWhiteSpace(conditionsText))
             return;
 
+        // Debug temporaire
+        Console.WriteLine($"DEBUG: Parsing conditions: '{conditionsText}'");
+
         // Nettoyer les conditions
         conditionsText = conditionsText.Trim();
         
-        // Patterns pour les conditions complexes avec sous-requêtes
+        // Vérifier d'abord s'il y a des sous-requêtes imbriquées dans les conditions
+        var nestedSubQueryPattern = @"(\w+)\s+([><=!]+)\s+\((.+?)\)";
+        var nestedMatch = Regex.Match(conditionsText, nestedSubQueryPattern);
+        if (nestedMatch.Success)
+        {
+            var propertyName = nestedMatch.Groups[1].Value.Trim();
+            var comparisonOperator = nestedMatch.Groups[2].Value.Trim();
+            var nestedSubQuery = nestedMatch.Groups[3].Value.Trim();
+            
+            Console.WriteLine($"DEBUG: Found nested subquery: {propertyName} {comparisonOperator} ({nestedSubQuery})");
+            
+            // Créer une sous-requête pour l'agrégation
+            var aggregateSubQuery = ParseSubQueryFromString(nestedSubQuery);
+            if (aggregateSubQuery != null)
+            {
+                // Déterminer si c'est une agrégation ou une sous-requête SELECT
+                if (nestedSubQuery.Contains("select", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Traiter comme une sous-requête SELECT avec agrégation
+                    var selectMatch = Regex.Match(nestedSubQuery, @"select\s+(sum|avg|min|max|count)\s+(\w+)\s+from\s+(\w+)(?:\s+where\s+(.+))?", RegexOptions.IgnoreCase);
+                    if (selectMatch.Success)
+                    {
+                        aggregateSubQuery.Type = QueryType.Aggregate;
+                        aggregateSubQuery.AggregateFunction = selectMatch.Groups[1].Value.ToLowerInvariant() switch
+                        {
+                            "sum" => AggregateFunction.Sum,
+                            "avg" => AggregateFunction.Avg,
+                            "min" => AggregateFunction.Min,
+                            "max" => AggregateFunction.Max,
+                            "count" => AggregateFunction.Count,
+                            _ => AggregateFunction.Avg
+                        };
+                        aggregateSubQuery.AggregateProperty = selectMatch.Groups[2].Value.Trim();
+                        aggregateSubQuery.NodeLabel = NormalizeLabel(selectMatch.Groups[3].Value.Trim());
+                        
+                        if (selectMatch.Groups.Count > 4 && !string.IsNullOrEmpty(selectMatch.Groups[4].Value))
+                        {
+                            ParseSimpleConditions(selectMatch.Groups[4].Value.Trim(), aggregateSubQuery.Conditions);
+                        }
+                        
+                        Console.WriteLine($"DEBUG: Parsed as SELECT AGGREGATE - Function: {aggregateSubQuery.AggregateFunction}, Property: {aggregateSubQuery.AggregateProperty}, Label: {aggregateSubQuery.NodeLabel}");
+                    }
+                    else
+                    {
+                        // Traiter comme une sous-requête SELECT simple
+                        aggregateSubQuery.Type = QueryType.FindNodes;
+                        aggregateSubQuery.SubQueryProperty = propertyName;
+                        aggregateSubQuery.SubQueryOperator = SubQueryOperator.In;
+                        
+                        var simpleSelectMatch = Regex.Match(nestedSubQuery, @"select\s+(\w+)\s+from\s+(\w+)(?:\s+where\s+(.+))?", RegexOptions.IgnoreCase);
+                        if (simpleSelectMatch.Success)
+                        {
+                            aggregateSubQuery.SubQueryProperty = simpleSelectMatch.Groups[1].Value.Trim();
+                            aggregateSubQuery.NodeLabel = NormalizeLabel(simpleSelectMatch.Groups[2].Value.Trim());
+                            
+                            if (simpleSelectMatch.Groups.Count > 3 && !string.IsNullOrEmpty(simpleSelectMatch.Groups[3].Value))
+                            {
+                                ParseSimpleConditions(simpleSelectMatch.Groups[3].Value.Trim(), aggregateSubQuery.Conditions);
+                            }
+                        }
+                        
+                        Console.WriteLine($"DEBUG: Parsed as SELECT subquery - Property: {aggregateSubQuery.SubQueryProperty}, Label: {aggregateSubQuery.NodeLabel}");
+                    }
+                }
+                else if (nestedSubQuery.Contains("avg") || nestedSubQuery.Contains("sum") || nestedSubQuery.Contains("min") || 
+                         nestedSubQuery.Contains("max") || nestedSubQuery.Contains("count"))
+                {
+                    // Traiter comme une agrégation directe
+                    aggregateSubQuery.Type = QueryType.Aggregate;
+                    aggregateSubQuery.AggregateProperty = propertyName;
+                    aggregateSubQuery.AggregateFunction = AggregateFunction.Avg; // Par défaut
+                    
+                    // Déterminer la fonction d'agrégation basée sur le texte
+                    if (nestedSubQuery.Contains("avg"))
+                        aggregateSubQuery.AggregateFunction = AggregateFunction.Avg;
+                    else if (nestedSubQuery.Contains("sum"))
+                        aggregateSubQuery.AggregateFunction = AggregateFunction.Sum;
+                    else if (nestedSubQuery.Contains("min"))
+                        aggregateSubQuery.AggregateFunction = AggregateFunction.Min;
+                    else if (nestedSubQuery.Contains("max"))
+                        aggregateSubQuery.AggregateFunction = AggregateFunction.Max;
+                    else if (nestedSubQuery.Contains("count"))
+                        aggregateSubQuery.AggregateFunction = AggregateFunction.Count;
+                    
+                    // Parser le label et les conditions
+                    var aggregateMatch = Regex.Match(nestedSubQuery, @"(?:avg|sum|min|max|count)\s+(\w+)\s+from\s+(\w+)(?:\s+where\s+(.+))?", RegexOptions.IgnoreCase);
+                    if (aggregateMatch.Success)
+                    {
+                        aggregateSubQuery.AggregateProperty = aggregateMatch.Groups[1].Value.Trim();
+                        aggregateSubQuery.NodeLabel = NormalizeLabel(aggregateMatch.Groups[2].Value.Trim());
+                        
+                        if (aggregateMatch.Groups.Count > 3 && !string.IsNullOrEmpty(aggregateMatch.Groups[3].Value))
+                        {
+                            ParseSimpleConditions(aggregateMatch.Groups[3].Value.Trim(), aggregateSubQuery.Conditions);
+                        }
+                    }
+                    
+                    Console.WriteLine($"DEBUG: Parsed as AGGREGATE - Function: {aggregateSubQuery.AggregateFunction}, Property: {aggregateSubQuery.AggregateProperty}, Label: {aggregateSubQuery.NodeLabel}");
+                }
+                else
+                {
+                    // Si le parsing échoue, essayer de traiter comme une sous-requête simple
+                    Console.WriteLine($"DEBUG: Failed to parse nested subquery, treating as simple subquery");
+                    aggregateSubQuery.Type = QueryType.FindNodes;
+                    aggregateSubQuery.NodeLabel = "values";
+                    aggregateSubQuery.SubQueryProperty = propertyName;
+                    aggregateSubQuery.SubQueryOperator = SubQueryOperator.In;
+                    aggregateSubQuery.Conditions = new Dictionary<string, object> { { "values", new List<object> { nestedSubQuery } } };
+                    
+                    Console.WriteLine($"DEBUG: Added simple subquery condition: {propertyName}_{comparisonOperator}_aggregate");
+                }
+                
+                // Stocker la sous-requête avec une clé qui sera reconnue par le moteur
+                conditions[$"{propertyName}_{comparisonOperator}_aggregate"] = aggregateSubQuery;
+                Console.WriteLine($"DEBUG: Added nested aggregate condition: {propertyName}_{comparisonOperator}_aggregate");
+                return;
+            }
+        }
+        
+        // Patterns pour les conditions complexes avec sous-requêtes (ordre spécifique pour éviter les conflits)
         var complexPatterns = new[]
         {
-            // Pattern 1 : "connected to via [edge_type]"
+                            // Patterns pour les sous-requêtes imbriquées avec parenthèses (plus spécifiques en premier)
+                @"(\w+)\s+in\s+\((.+?)\s+where\s+(.+?)\s+([><=!]+)\s+\((.+?)\)\)",
+                @"(\w+)\s+exists\s+in\s+\((.+?)\s+where\s+(.+?)\s+([><=!]+)\s+\((.+?)\)\)",
+                @"(\w+)\s+any\s+in\s+\((.+?)\s+where\s+(.+?)\s+([><=!]+)\s+\((.+?)\)\)",
+                @"(\w+)\s+all\s+in\s+\((.+?)\s+where\s+(.+?)\s+([><=!]+)\s+\((.+?)\)\)",
+            
+            // Patterns pour les sous-requêtes EXISTS/NOT EXISTS (NOT EXISTS en premier pour éviter les conflits)
+            @"(\w+)\s+not\s+exists\s+in\s+\((.+?)\)",
+            @"(\w+)\s+exists\s+in\s+\((.+?)\)",
+            @"(\w+)\s+not\s+exists\s+where\s+(.+)",
+            @"(\w+)\s+exists\s+where\s+(.+)",
+            
+            // Patterns pour les sous-requêtes IN/NOT IN avec SELECT
+            @"(\w+)\s+in\s+select\s+(.+?)\s+from\s+(\w+)(?:\s+where\s+(.+?))?",
+            @"(\w+)\s+not\s+in\s+select\s+(.+?)\s+from\s+(\w+)(?:\s+where\s+(.+?))?",
+            
+            // Patterns pour les agrégations dans les conditions
+            @"(\w+)\s+(eq|gt|lt|gte|lte)\s+(sum|avg|min|max|count)\s+\((.+?)\)\s+from\s+(\w+)(?:\s+where\s+(.+?))?",
+            @"(\w+)\s+(eq|gt|lt|gte|lte)\s+(sum|avg|min|max|count)\s+(\w+)\s+from\s+(\w+)(?:\s+where\s+(.+?))?",
+            
+            // Patterns pour les sous-requêtes avec ANY/ALL
+            @"(\w+)\s+any\s+in\s+\((.+?)\)",
+            @"(\w+)\s+all\s+in\s+\((.+?)\)",
+            @"(\w+)\s+any\s+select\s+(.+?)\s+from\s+(\w+)(?:\s+where\s+(.+?))?",
+            @"(\w+)\s+all\s+select\s+(.+?)\s+from\s+(\w+)(?:\s+where\s+(.+?))?",
+            
+            // Patterns génériques IN/NOT IN (en dernier pour éviter les conflits)
+            @"(\w+)\s+in\s+\((.+?)\)",
+            @"(\w+)\s+not\s+in\s+\((.+?)\)",
+            
+            // Patterns existants pour la compatibilité
             @"connected\s+to\s+via\s+(\w+)",
-            // Pattern 2 : "connected to [label] via [edge_type]"
             @"connected\s+to\s+(\w+)\s+via\s+(\w+)",
-            // Pattern 3 : "connected to [label] ""name"" via [edge_type]"
             @"connected\s+to\s+(\w+)\s+""([^""]+)""\s+via\s+(\w+)",
-            // Pattern 4 : "connected to via [edge_type] where [conditions]"
             @"connected\s+to\s+via\s+(\w+)\s+where\s+(.+)",
-            // Pattern 5 : "connected to [label] via [edge_type] where [conditions]"
             @"connected\s+to\s+(\w+)\s+via\s+(\w+)\s+where\s+(.+)",
-            // Pattern 6 : "connected to [label] ""name"" via [edge_type] where [conditions]"
             @"connected\s+to\s+(\w+)\s+""([^""]+)""\s+via\s+(\w+)\s+where\s+(.+)",
-            // Pattern 7 : "has edge [edge_type] to [label]"
             @"has\s+edge\s+(\w+)\s+to\s+(\w+)",
-            // Pattern 8 : "has edge [edge_type] to [label] ""name""
             @"has\s+edge\s+(\w+)\s+to\s+(\w+)\s+""([^""]+)""",
-            // Pattern 9 : "has edge [edge_type] to [label] where [conditions]"
             @"has\s+edge\s+(\w+)\s+to\s+(\w+)\s+where\s+(.+)",
-            // Pattern 10 : "has edge [edge_type] to [label] ""name"" where [conditions]"
             @"has\s+edge\s+(\w+)\s+to\s+(\w+)\s+""([^""]+)""\s+where\s+(.+)",
-            // Pattern 11 : "connected via [edge_type]"
             @"connected\s+via\s+(\w+)",
-            // Pattern 12 : "connected via [edge_type] to [label]"
             @"connected\s+via\s+(\w+)\s+to\s+(\w+)",
-            // Pattern 13 : "connected via [edge_type] to [label] ""name""
             @"connected\s+via\s+(\w+)\s+to\s+(\w+)\s+""([^""]+)""",
-            // Pattern 14 : "connected via [edge_type] where [conditions]"
             @"connected\s+via\s+(\w+)\s+where\s+(.+)",
-            // Pattern 15 : "connected via [edge_type] to [label] where [conditions]"
             @"connected\s+via\s+(\w+)\s+to\s+(\w+)\s+where\s+(.+)",
-            // Pattern 16 : "connected via [edge_type] to [label] ""name"" where [conditions]"
             @"connected\s+via\s+(\w+)\s+to\s+(\w+)\s+""([^""]+)""\s+where\s+(.+)"
         };
 
@@ -2251,11 +2388,359 @@ public class NaturalLanguageParser
             var match = Regex.Match(conditionsText, pattern, RegexOptions.IgnoreCase);
             if (match.Success)
             {
-                if (pattern.Contains("connected\\s+to\\s+via") && pattern.Contains("where"))
+                Console.WriteLine($"DEBUG: Pattern matched: '{pattern}'");
+                Console.WriteLine($"DEBUG: Groups: {string.Join(", ", match.Groups.Cast<Group>().Select(g => g.Value))}");
+                
+                // Patterns pour EXISTS/NOT EXISTS
+                if (pattern == @"(\w+)\s+exists\s+in\s+\((.+?)\)")
                 {
-                    // Pattern 4 : "connected to via [edge_type] where [conditions]"
+                    var propertyName = match.Groups[1].Value.Trim();
+                    var subQueryText = match.Groups[2].Value.Trim();
+                    
+                    Console.WriteLine($"DEBUG: Processing EXISTS IN - Property: {propertyName}, SubQuery: {subQueryText}");
+                    
+                    var subQuery = ParseSubQueryFromString(subQueryText);
+                    if (subQuery != null)
+                    {
+                        subQuery.SubQueryOperator = SubQueryOperator.Exists;
+                        subQuery.SubQueryProperty = null; // Pas de propriété spécifique pour EXISTS
+                        subQuery.ParentQuery = parentQuery;
+                        subQuery.SubQueryDepth = parentQuery?.SubQueryDepth + 1 ?? 0;
+                        
+                        conditions[$"{propertyName}_exists"] = subQuery;
+                        Console.WriteLine($"DEBUG: Added EXISTS condition for {propertyName}");
+                        return;
+                    }
+                }
+                else if (pattern == @"(\w+)\s+not\s+exists\s+in\s+\((.+?)\)")
+                {
+                    var propertyName = match.Groups[1].Value.Trim();
+                    var subQueryText = match.Groups[2].Value.Trim();
+                    
+                    Console.WriteLine($"DEBUG: Processing NOT EXISTS IN - Property: {propertyName}, SubQuery: {subQueryText}");
+                    
+                    var subQuery = ParseSubQueryFromString(subQueryText);
+                    if (subQuery != null)
+                    {
+                        subQuery.SubQueryOperator = SubQueryOperator.NotExists;
+                        subQuery.SubQueryProperty = null; // Pas de propriété spécifique pour NOT EXISTS
+                        subQuery.ParentQuery = parentQuery;
+                        subQuery.SubQueryDepth = parentQuery?.SubQueryDepth + 1 ?? 0;
+                        
+                        conditions[$"{propertyName}_not_exists"] = subQuery;
+                        Console.WriteLine($"DEBUG: Added NOT EXISTS condition for {propertyName}");
+                        return;
+                    }
+                }
+                else if (pattern == @"(\w+)\s+exists\s+where\s+(.+)")
+                {
+                    var propertyName = match.Groups[1].Value.Trim();
+                    var subConditions = match.Groups[2].Value.Trim();
+                    
+                    Console.WriteLine($"DEBUG: Processing EXISTS WHERE - Property: {propertyName}, Conditions: {subConditions}");
+                    
+                    var subQuery = new ParsedQuery
+                    {
+                        Type = QueryType.FindNodes,
+                        NodeLabel = NormalizeLabel(propertyName),
+                        SubQueryOperator = SubQueryOperator.Exists,
+                        SubQueryProperty = null, // Pas de propriété spécifique pour EXISTS
+                        ParentQuery = parentQuery,
+                        SubQueryDepth = parentQuery?.SubQueryDepth + 1 ?? 0
+                    };
+                    
+                    ParseSimpleConditions(subConditions, subQuery.Conditions);
+                    
+                    conditions[$"{propertyName}_exists"] = subQuery;
+                    Console.WriteLine($"DEBUG: Added EXISTS WHERE condition for {propertyName}");
+                    return;
+                }
+                else if (pattern == @"(\w+)\s+not\s+exists\s+where\s+(.+)")
+                {
+                    var propertyName = match.Groups[1].Value.Trim();
+                    var subConditions = match.Groups[2].Value.Trim();
+                    
+                    Console.WriteLine($"DEBUG: Processing NOT EXISTS WHERE - Property: {propertyName}, Conditions: {subConditions}");
+                    
+                    var subQuery = new ParsedQuery
+                    {
+                        Type = QueryType.FindNodes,
+                        NodeLabel = NormalizeLabel(propertyName),
+                        SubQueryOperator = SubQueryOperator.NotExists,
+                        SubQueryProperty = null, // Pas de propriété spécifique pour NOT EXISTS
+                        ParentQuery = parentQuery,
+                        SubQueryDepth = parentQuery?.SubQueryDepth + 1 ?? 0
+                    };
+                    
+                    ParseSimpleConditions(subConditions, subQuery.Conditions);
+                    
+                    conditions[$"{propertyName}_not_exists"] = subQuery;
+                    Console.WriteLine($"DEBUG: Added NOT EXISTS WHERE condition for {propertyName}");
+                    return;
+                }
+                
+                // Patterns pour IN/NOT IN avec SELECT
+                else if (pattern.Contains("in\\s+select"))
+                {
+                    var propertyName = match.Groups[1].Value.Trim();
+                    var selectProperty = match.Groups[2].Value.Trim();
+                    var fromLabel = match.Groups[3].Value.Trim();
+                    var whereConditions = match.Groups.Count > 4 ? match.Groups[4].Value.Trim() : "";
+                    
+                    Console.WriteLine($"DEBUG: Processing IN SELECT - Property: {propertyName}, Select: {selectProperty}, From: {fromLabel}, Where: {whereConditions}");
+                    
+                    var subQuery = new ParsedQuery
+                    {
+                        Type = QueryType.FindNodes,
+                        NodeLabel = NormalizeLabel(fromLabel),
+                        SubQueryProperty = selectProperty,
+                        SubQueryOperator = SubQueryOperator.In,
+                        ParentQuery = parentQuery,
+                        SubQueryDepth = parentQuery?.SubQueryDepth + 1 ?? 0
+                    };
+                    
+                    if (!string.IsNullOrEmpty(whereConditions))
+                    {
+                        ParseSimpleConditions(whereConditions, subQuery.Conditions);
+                    }
+                    
+                    conditions[$"{propertyName}_in"] = subQuery;
+                    Console.WriteLine($"DEBUG: Added IN SELECT condition for {propertyName}");
+                    return;
+                }
+                else if (pattern.Contains("not\\s+in\\s+select"))
+                {
+                    var propertyName = match.Groups[1].Value.Trim();
+                    var selectProperty = match.Groups[2].Value.Trim();
+                    var fromLabel = match.Groups[3].Value.Trim();
+                    var whereConditions = match.Groups.Count > 4 ? match.Groups[4].Value.Trim() : "";
+                    
+                    Console.WriteLine($"DEBUG: Processing NOT IN SELECT - Property: {propertyName}, Select: {selectProperty}, From: {fromLabel}, Where: {whereConditions}");
+                    
+                    var subQuery = new ParsedQuery
+                    {
+                        Type = QueryType.FindNodes,
+                        NodeLabel = NormalizeLabel(fromLabel),
+                        SubQueryProperty = selectProperty,
+                        SubQueryOperator = SubQueryOperator.NotIn,
+                        ParentQuery = parentQuery,
+                        SubQueryDepth = parentQuery?.SubQueryDepth + 1 ?? 0
+                    };
+                    
+                    if (!string.IsNullOrEmpty(whereConditions))
+                    {
+                        ParseSimpleConditions(whereConditions, subQuery.Conditions);
+                    }
+                    
+                    conditions[$"{propertyName}_not_in"] = subQuery;
+                    Console.WriteLine($"DEBUG: Added NOT IN SELECT condition for {propertyName}");
+                    return;
+                }
+                
+                // Patterns pour les agrégations dans les conditions
+                else if (pattern.Contains("\\s+(eq|gt|lt|gte|lte)\\s+(sum|avg|min|max|count)\\s+"))
+                {
+                    var propertyName = match.Groups[1].Value.Trim();
+                    var comparisonOperator = match.Groups[2].Value.Trim();
+                    var aggregateFunction = match.Groups[3].Value.Trim();
+                    var aggregateProperty = match.Groups[4].Value.Trim();
+                    var fromLabel = match.Groups[5].Value.Trim();
+                    var whereConditions = match.Groups.Count > 6 ? match.Groups[6].Value.Trim() : "";
+                    
+                    Console.WriteLine($"DEBUG: Processing AGGREGATE - Property: {propertyName}, Operator: {comparisonOperator}, Function: {aggregateFunction}, Property: {aggregateProperty}, From: {fromLabel}, Where: {whereConditions}");
+                    
+                    var subQuery = new ParsedQuery
+                    {
+                        Type = QueryType.Aggregate,
+                        NodeLabel = NormalizeLabel(fromLabel),
+                        AggregateProperty = aggregateProperty,
+                        AggregateFunction = aggregateFunction switch
+                        {
+                            "sum" => AggregateFunction.Sum,
+                            "avg" => AggregateFunction.Avg,
+                            "min" => AggregateFunction.Min,
+                            "max" => AggregateFunction.Max,
+                            "count" => AggregateFunction.Count,
+                            _ => AggregateFunction.Avg
+                        },
+                        ParentQuery = parentQuery,
+                        SubQueryDepth = parentQuery?.SubQueryDepth + 1 ?? 0
+                    };
+                    
+                    if (!string.IsNullOrEmpty(whereConditions))
+                    {
+                        ParseSimpleConditions(whereConditions, subQuery.Conditions);
+                    }
+                    
+                    conditions[$"{propertyName}_{comparisonOperator}_aggregate"] = subQuery;
+                    Console.WriteLine($"DEBUG: Added AGGREGATE condition for {propertyName}");
+                    return;
+                }
+                
+                // Patterns pour ANY/ALL
+                else if (pattern == @"(\w+)\s+any\s+in\s+\((.+?)\)")
+                {
+                    var propertyName = match.Groups[1].Value.Trim();
+                    var subQueryText = match.Groups[2].Value.Trim();
+                    
+                    Console.WriteLine($"DEBUG: Processing ANY IN - Property: {propertyName}, SubQuery: {subQueryText}");
+                    
+                    var subQuery = ParseSubQueryFromString(subQueryText);
+                    if (subQuery != null)
+                    {
+                        subQuery.SubQueryOperator = SubQueryOperator.Any;
+                        subQuery.SubQueryProperty = propertyName;
+                        subQuery.ParentQuery = parentQuery;
+                        subQuery.SubQueryDepth = parentQuery?.SubQueryDepth + 1 ?? 0;
+                        
+                        conditions[$"{propertyName}_any"] = subQuery;
+                        Console.WriteLine($"DEBUG: Added ANY condition for {propertyName}");
+                        return;
+                    }
+                }
+                else if (pattern == @"(\w+)\s+all\s+in\s+\((.+?)\)")
+                {
+                    var propertyName = match.Groups[1].Value.Trim();
+                    var subQueryText = match.Groups[2].Value.Trim();
+                    
+                    Console.WriteLine($"DEBUG: Processing ALL IN - Property: {propertyName}, SubQuery: {subQueryText}");
+                    
+                    var subQuery = ParseSubQueryFromString(subQueryText);
+                    if (subQuery != null)
+                    {
+                        subQuery.SubQueryOperator = SubQueryOperator.All;
+                        subQuery.SubQueryProperty = propertyName;
+                        subQuery.ParentQuery = parentQuery;
+                        subQuery.SubQueryDepth = parentQuery?.SubQueryDepth + 1 ?? 0;
+                        
+                        conditions[$"{propertyName}_all"] = subQuery;
+                        Console.WriteLine($"DEBUG: Added ALL condition for {propertyName}");
+                        return;
+                    }
+                }
+                
+                // Patterns pour les sous-requêtes imbriquées avec parenthèses
+                else if (pattern.Contains(" in (") && pattern.Contains(" where ") && pattern.Contains("([><=!]+)") && pattern.Contains(" ("))
+                {
+                    var propertyName = match.Groups[1].Value.Trim();
+                    var selectProperty = match.Groups[2].Value.Trim();
+                    var whereCondition = match.Groups[3].Value.Trim();
+                    var comparisonOperator = match.Groups[4].Value.Trim();
+                    var nestedSubQuery = match.Groups[5].Value.Trim();
+                    
+                    Console.WriteLine($"DEBUG: Processing NESTED IN - Property: {propertyName}, Select: {selectProperty}, Where: {whereCondition}, Operator: {comparisonOperator}, Nested: {nestedSubQuery}");
+                    
+                    // Créer la sous-requête principale
+                    var mainSubQuery = new ParsedQuery
+                    {
+                        Type = QueryType.FindNodes,
+                        SubQueryProperty = selectProperty,
+                        SubQueryOperator = SubQueryOperator.In,
+                        ParentQuery = parentQuery,
+                        SubQueryDepth = parentQuery?.SubQueryDepth + 1 ?? 0
+                    };
+                    
+                    // Ajouter la condition WHERE avec la sous-requête imbriquée
+                    var fullWhereCondition = $"{whereCondition} {comparisonOperator} ({nestedSubQuery})";
+                    ParseConditions(fullWhereCondition, mainSubQuery.Conditions);
+                    
+                    conditions[$"{propertyName}_nested_in"] = mainSubQuery;
+                    Console.WriteLine($"DEBUG: Added NESTED IN condition for {propertyName}");
+                    return;
+                }
+                else if (pattern.Contains(" exists in (") && pattern.Contains(" where ") && pattern.Contains("([><=!]+)") && pattern.Contains(" ("))
+                {
+                    var propertyName = match.Groups[1].Value.Trim();
+                    var selectProperty = match.Groups[2].Value.Trim();
+                    var whereCondition = match.Groups[3].Value.Trim();
+                    var comparisonOperator = match.Groups[4].Value.Trim();
+                    var nestedSubQuery = match.Groups[5].Value.Trim();
+                    
+                    Console.WriteLine($"DEBUG: Processing NESTED EXISTS - Property: {propertyName}, Select: {selectProperty}, Where: {whereCondition}, Operator: {comparisonOperator}, Nested: {nestedSubQuery}");
+                    
+                    // Créer la sous-requête principale
+                    var mainSubQuery = new ParsedQuery
+                    {
+                        Type = QueryType.FindNodes,
+                        SubQueryProperty = null, // Pas de propriété spécifique pour EXISTS
+                        SubQueryOperator = SubQueryOperator.Exists,
+                        ParentQuery = parentQuery,
+                        SubQueryDepth = parentQuery?.SubQueryDepth + 1 ?? 0
+                    };
+                    
+                    // Ajouter la condition WHERE avec la sous-requête imbriquée
+                    var fullWhereCondition = $"{whereCondition} {comparisonOperator} ({nestedSubQuery})";
+                    ParseConditions(fullWhereCondition, mainSubQuery.Conditions);
+                    
+                    conditions[$"{propertyName}_nested_exists"] = mainSubQuery;
+                    Console.WriteLine($"DEBUG: Added NESTED EXISTS condition for {propertyName}");
+                    return;
+                }
+                else if (pattern.Contains(" any in (") && pattern.Contains(" where ") && pattern.Contains("([><=!]+)") && pattern.Contains(" ("))
+                {
+                    var propertyName = match.Groups[1].Value.Trim();
+                    var selectProperty = match.Groups[2].Value.Trim();
+                    var whereCondition = match.Groups[3].Value.Trim();
+                    var comparisonOperator = match.Groups[4].Value.Trim();
+                    var nestedSubQuery = match.Groups[5].Value.Trim();
+                    
+                    Console.WriteLine($"DEBUG: Processing NESTED ANY - Property: {propertyName}, Select: {selectProperty}, Where: {whereCondition}, Operator: {comparisonOperator}, Nested: {nestedSubQuery}");
+                    
+                    // Créer la sous-requête principale
+                    var mainSubQuery = new ParsedQuery
+                    {
+                        Type = QueryType.FindNodes,
+                        SubQueryProperty = selectProperty,
+                        SubQueryOperator = SubQueryOperator.Any,
+                        ParentQuery = parentQuery,
+                        SubQueryDepth = parentQuery?.SubQueryDepth + 1 ?? 0
+                    };
+                    
+                    // Ajouter la condition WHERE avec la sous-requête imbriquée
+                    var fullWhereCondition = $"{whereCondition} {comparisonOperator} ({nestedSubQuery})";
+                    ParseConditions(fullWhereCondition, mainSubQuery.Conditions);
+                    
+                    conditions[$"{propertyName}_nested_any"] = mainSubQuery;
+                    Console.WriteLine($"DEBUG: Added NESTED ANY condition for {propertyName}");
+                    return;
+                }
+                else if (pattern.Contains(" all in (") && pattern.Contains(" where ") && pattern.Contains("([><=!]+)") && pattern.Contains(" ("))
+                {
+                    var propertyName = match.Groups[1].Value.Trim();
+                    var selectProperty = match.Groups[2].Value.Trim();
+                    var whereCondition = match.Groups[3].Value.Trim();
+                    var comparisonOperator = match.Groups[4].Value.Trim();
+                    var nestedSubQuery = match.Groups[5].Value.Trim();
+                    
+                    Console.WriteLine($"DEBUG: Processing NESTED ALL - Property: {propertyName}, Select: {selectProperty}, Where: {whereCondition}, Operator: {comparisonOperator}, Nested: {nestedSubQuery}");
+                    
+                    // Créer la sous-requête principale
+                    var mainSubQuery = new ParsedQuery
+                    {
+                        Type = QueryType.FindNodes,
+                        SubQueryProperty = selectProperty,
+                        SubQueryOperator = SubQueryOperator.All,
+                        ParentQuery = parentQuery,
+                        SubQueryDepth = parentQuery?.SubQueryDepth + 1 ?? 0
+                    };
+                    
+                    // Ajouter la condition WHERE avec la sous-requête imbriquée
+                    var fullWhereCondition = $"{whereCondition} {comparisonOperator} ({nestedSubQuery})";
+                    ParseConditions(fullWhereCondition, mainSubQuery.Conditions);
+                    
+                    conditions[$"{propertyName}_nested_all"] = mainSubQuery;
+                    Console.WriteLine($"DEBUG: Added NESTED ALL condition for {propertyName}");
+                    return;
+                }
+                
+                // Patterns existants pour la compatibilité
+                else if (pattern.Contains("connected\\s+to\\s+via") && pattern.Contains("where"))
+                {
+                    // Pattern : "connected to via [edge_type] where [conditions]"
                     var edgeType = match.Groups[1].Value.Trim();
                     var subConditions = match.Groups[2].Value.Trim();
+                    
+                    Console.WriteLine($"DEBUG: Processing CONNECTED TO VIA - EdgeType: {edgeType}, Conditions: {subConditions}");
                     
                     var subQuery = new ParsedQuery
                     {
@@ -2266,14 +2751,17 @@ public class NaturalLanguageParser
                     
                     ParseConditions(subConditions, subQuery.Conditions);
                     conditions["connected_to_via"] = subQuery;
+                    Console.WriteLine($"DEBUG: Added CONNECTED TO VIA condition");
                     return;
                 }
                 else if (pattern.Contains("connected\\s+to\\s+\\w+\\s+via") && pattern.Contains("where"))
                 {
-                    // Pattern 5 : "connected to [label] via [edge_type] where [conditions]"
+                    // Pattern : "connected to [label] via [edge_type] where [conditions]"
                     var targetLabel = match.Groups[1].Value.Trim();
                     var edgeType = match.Groups[2].Value.Trim();
                     var subConditions = match.Groups[3].Value.Trim();
+                    
+                    Console.WriteLine($"DEBUG: Processing CONNECTED TO [label] VIA - TargetLabel: {targetLabel}, EdgeType: {edgeType}, Conditions: {subConditions}");
                     
                     var subQuery = new ParsedQuery
                     {
@@ -2285,15 +2773,18 @@ public class NaturalLanguageParser
                     
                     ParseConditions(subConditions, subQuery.Conditions);
                     conditions["connected_to_via"] = subQuery;
+                    Console.WriteLine($"DEBUG: Added CONNECTED TO [label] VIA condition");
                     return;
                 }
                 else if (pattern.Contains("connected\\s+to\\s+\\w+\\s+\"") && pattern.Contains("where"))
                 {
-                    // Pattern 6 : "connected to [label] ""name"" via [edge_type] where [conditions]"
+                    // Pattern : "connected to [label] ""name"" via [edge_type] where [conditions]"
                     var targetLabel = match.Groups[1].Value.Trim();
                     var targetName = match.Groups[2].Value.Trim();
                     var edgeType = match.Groups[3].Value.Trim();
                     var subConditions = match.Groups[4].Value.Trim();
+                    
+                    Console.WriteLine($"DEBUG: Processing CONNECTED TO [label] \"name\" VIA - TargetLabel: {targetLabel}, TargetName: {targetName}, EdgeType: {edgeType}, Conditions: {subConditions}");
                     
                     var subQuery = new ParsedQuery
                     {
@@ -2306,14 +2797,17 @@ public class NaturalLanguageParser
                     
                     ParseConditions(subConditions, subQuery.Conditions);
                     conditions["connected_to_via"] = subQuery;
+                    Console.WriteLine($"DEBUG: Added CONNECTED TO [label] \"name\" VIA condition");
                     return;
                 }
                 else if (pattern.Contains("has\\s+edge") && pattern.Contains("where"))
                 {
-                    // Pattern 9/10 : "has edge [edge_type] to [label] where [conditions]"
+                    // Pattern : "has edge [edge_type] to [label] where [conditions]"
                     var edgeType = match.Groups[1].Value.Trim();
                     var targetLabel = match.Groups[2].Value.Trim();
                     var subConditions = match.Groups[3].Value.Trim();
+                    
+                    Console.WriteLine($"DEBUG: Processing HAS EDGE - EdgeType: {edgeType}, TargetLabel: {targetLabel}, Conditions: {subConditions}");
                     
                     var subQuery = new ParsedQuery
                     {
@@ -2325,13 +2819,16 @@ public class NaturalLanguageParser
                     
                     ParseConditions(subConditions, subQuery.Conditions);
                     conditions["has_edge"] = subQuery;
+                    Console.WriteLine($"DEBUG: Added HAS EDGE condition");
                     return;
                 }
                 else if (pattern.Contains("connected\\s+via") && pattern.Contains("where"))
                 {
-                    // Pattern 14/15/16 : "connected via [edge_type] where [conditions]"
+                    // Pattern : "connected via [edge_type] where [conditions]"
                     var edgeType = match.Groups[1].Value.Trim();
                     var subConditions = match.Groups[2].Value.Trim();
+                    
+                    Console.WriteLine($"DEBUG: Processing CONNECTED VIA - EdgeType: {edgeType}, Conditions: {subConditions}");
                     
                     var subQuery = new ParsedQuery
                     {
@@ -2342,52 +2839,115 @@ public class NaturalLanguageParser
                     
                     ParseConditions(subConditions, subQuery.Conditions);
                     conditions["connected_via"] = subQuery;
+                    Console.WriteLine($"DEBUG: Added CONNECTED VIA condition");
                     return;
                 }
                 else if (pattern.Contains("connected\\s+to\\s+via"))
                 {
-                    // Pattern 1 : "connected to via [edge_type]"
+                    // Pattern : "connected to via [edge_type]"
                     var edgeType = match.Groups[1].Value.Trim();
                     conditions["connected_to_via"] = edgeType;
+                    Console.WriteLine($"DEBUG: Added CONNECTED TO VIA condition");
                     return;
                 }
                 else if (pattern.Contains("connected\\s+to\\s+\\w+\\s+via"))
                 {
-                    // Pattern 2 : "connected to [label] via [edge_type]"
+                    // Pattern : "connected to [label] via [edge_type]"
                     var targetLabel = match.Groups[1].Value.Trim();
                     var edgeType = match.Groups[2].Value.Trim();
                     conditions["connected_to_via"] = new { Label = targetLabel, EdgeType = edgeType };
+                    Console.WriteLine($"DEBUG: Added CONNECTED TO [label] VIA condition");
                     return;
                 }
                 else if (pattern.Contains("connected\\s+to\\s+\\w+\\s+\""))
                 {
-                    // Pattern 3 : "connected to [label] ""name"" via [edge_type]"
+                    // Pattern : "connected to [label] ""name"" via [edge_type]"
                     var targetLabel = match.Groups[1].Value.Trim();
                     var targetName = match.Groups[2].Value.Trim();
                     var edgeType = match.Groups[3].Value.Trim();
                     conditions["connected_to_via"] = new { Label = targetLabel, Name = targetName, EdgeType = edgeType };
+                    Console.WriteLine($"DEBUG: Added CONNECTED TO [label] \"name\" VIA condition");
                     return;
                 }
                 else if (pattern.Contains("has\\s+edge"))
                 {
-                    // Pattern 7/8 : "has edge [edge_type] to [label]"
+                    // Pattern : "has edge [edge_type] to [label]"
                     var edgeType = match.Groups[1].Value.Trim();
                     var targetLabel = match.Groups[2].Value.Trim();
                     conditions["has_edge"] = new { EdgeType = edgeType, TargetLabel = targetLabel };
+                    Console.WriteLine($"DEBUG: Added HAS EDGE condition");
                     return;
                 }
                 else if (pattern.Contains("connected\\s+via"))
                 {
-                    // Pattern 11/12/13 : "connected via [edge_type]"
+                    // Pattern : "connected via [edge_type]"
                     var edgeType = match.Groups[1].Value.Trim();
                     conditions["connected_via"] = edgeType;
+                    Console.WriteLine($"DEBUG: Added CONNECTED VIA condition");
+                    return;
+                }
+                else if (pattern.Contains("in\\s+select"))
+                {
+                    var propertyName = match.Groups[1].Value.Trim();
+                    var selectProperty = match.Groups[2].Value.Trim();
+                    var fromLabel = match.Groups[3].Value.Trim();
+                    var whereConditions = match.Groups.Count > 4 ? match.Groups[4].Value.Trim() : "";
+                    
+                    Console.WriteLine($"DEBUG: Processing IN SELECT - Property: {propertyName}, Select: {selectProperty}, From: {fromLabel}, Where: {whereConditions}");
+                    
+                    // Créer la sous-requête
+                    var subQuery = new ParsedQuery
+                    {
+                        Type = QueryType.FindNodes,
+                        NodeLabel = NormalizeLabel(fromLabel),
+                        SubQueryProperty = selectProperty,
+                        SubQueryOperator = SubQueryOperator.In,
+                        ParentQuery = parentQuery,
+                        SubQueryDepth = parentQuery?.SubQueryDepth + 1 ?? 0
+                    };
+                    
+                    Console.WriteLine($"DEBUG: Created subquery - Label: {subQuery.NodeLabel}, Property: {subQuery.SubQueryProperty}");
+                    
+                    // Ajouter les conditions WHERE si présentes
+                    if (!string.IsNullOrEmpty(whereConditions))
+                    {
+                        ParseSimpleConditions(whereConditions, subQuery.Conditions);
+                    }
+                    
+                    conditions[$"{propertyName}_in"] = subQuery;
+                    Console.WriteLine($"DEBUG: Added IN SELECT condition for {propertyName}");
                     return;
                 }
             }
         }
 
-        // Si aucun pattern complexe n'est trouvé, traiter comme des conditions normales
-        ParseConditions(conditionsText, conditions);
+        Console.WriteLine($"DEBUG: No complex patterns matched, falling back to simple parsing");
+        
+        // Si aucun pattern complexe ne correspond, utiliser le parsing simple
+        ParseSimpleConditions(conditionsText, conditions);
+    }
+
+    /// <summary>
+    /// Parse une sous-requête à partir d'une chaîne de caractères
+    /// </summary>
+    private ParsedQuery? ParseSubQueryFromString(string query)
+    {
+        try
+        {
+            var parsedQuery = new ParsedQuery();
+            ParseSubQuery(query, parsedQuery);
+            
+            if (parsedQuery.ValidationErrors.Any())
+            {
+                return null;
+            }
+            
+            return parsedQuery;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private SubQueryOperator ExtractSubQueryOperator(string pattern)
@@ -2410,12 +2970,18 @@ public class NaturalLanguageParser
     {
         try
         {
+            Console.WriteLine($"DEBUG: ParseSubQuery - Input: '{query}'");
+            
             // Nettoyer la requête
             query = query.Trim();
             
             // Patterns pour sous-requêtes avec support amélioré des agrégations
             var patterns = new[]
             {
+                // Pattern 0.5: SELECT simple "select property from label where ..."
+                @"select\s+(\w+|\*)\s+from\s+(\w+)(?:\s+where\s+(.+))?",
+                // Pattern 0: Valeurs simples "(25, 30, 35)" ou "25, 30, 35"
+                @"^([^,]+(?:,\s*[^,]+)*)$",
                 // Pattern 1: Agrégation simple "avg persons property age where ..."
                 @"(sum|avg|min|max|count)\s+(\w+)\s+property\s+(\w+)(?:\s+where\s+(.+))?",
                 // Pattern 2: Agrégation avec "from" "avg age from persons where ..."
@@ -2437,55 +3003,93 @@ public class NaturalLanguageParser
                 var match = Regex.Match(query, pattern, RegexOptions.IgnoreCase);
                 if (match.Success)
                 {
-                                if (pattern.Contains("property") || pattern.Contains("from") || (pattern.Contains("select") && pattern.Contains("(sum|avg|min|max|count)")))
-            {
-                // Patterns 1-4: Agrégations
-                var functionName = match.Groups[1].Value.ToLowerInvariant();
-                var propertyName = match.Groups[2].Value;
-                var labelName = match.Groups[3].Value;
-                var conditionsText = match.Groups.Count > 4 ? match.Groups[4].Value : "";
+                    Console.WriteLine($"DEBUG: Pattern matched: '{pattern}'");
+                    Console.WriteLine($"DEBUG: Groups: {string.Join(", ", match.Groups.Cast<Group>().Select(g => g.Value))}");
+                    
+                    if (pattern == @"select\s+(\w+|\*)\s+from\s+(\w+)(?:\s+where\s+(.+))?")
+                    {
+                        // Pattern 0.5: SELECT simple
+                        parsedQuery.SubQueryProperty = match.Groups[1].Value;
+                        parsedQuery.NodeLabel = NormalizeLabel(match.Groups[2].Value);
+                        parsedQuery.Type = QueryType.FindNodes;
+                        
+                        Console.WriteLine($"DEBUG: Parsed as SELECT - Property: {parsedQuery.SubQueryProperty}, Label: {parsedQuery.NodeLabel}");
+                        
+                        if (match.Groups.Count > 3 && !string.IsNullOrEmpty(match.Groups[3].Value))
+                        {
+                            ParseSimpleConditions(match.Groups[3].Value, parsedQuery.Conditions);
+                        }
+                    }
+                    else if (pattern == @"^([^,]+(?:,\s*[^,]+)*)$")
+                    {
+                        // Pattern 0: Valeurs simples comme "25, 30, 35"
+                        var valuesText = match.Groups[1].Value.Trim();
+                        var values = valuesText.Split(',').Select(v => ParseDynamicValue(v.Trim())).ToList();
+                        
+                        parsedQuery.Type = QueryType.FindNodes;
+                        parsedQuery.NodeLabel = "values";
+                        parsedQuery.SubQueryProperty = "values";
+                        
+                        // Stocker les valeurs dans les conditions pour les récupérer plus tard
+                        parsedQuery.Conditions["values"] = values;
+                        // Stocker aussi dans SubQueryProperty pour l'extraction
+                        parsedQuery.SubQueryProperty = "values";
+                        
+                        Console.WriteLine($"DEBUG: Parsed as VALUES - Values: {string.Join(", ", values)}");
+                    }
+                    else if (pattern.Contains("property") || pattern.Contains("from") || (pattern.Contains("select") && pattern.Contains("(sum|avg|min|max|count)")))
+                    {
+                        // Patterns 1-4: Agrégations
+                        var functionName = match.Groups[1].Value.ToLowerInvariant();
+                        var propertyName = match.Groups[2].Value;
+                        var labelName = match.Groups[3].Value;
+                        var conditionsText = match.Groups.Count > 4 ? match.Groups[4].Value : "";
 
-                parsedQuery.Type = QueryType.Aggregate;
-                parsedQuery.AggregateFunction = functionName switch
-                {
-                    "sum" => AggregateFunction.Sum,
-                    "avg" => AggregateFunction.Avg,
-                    "min" => AggregateFunction.Min,
-                    "max" => AggregateFunction.Max,
-                    "count" => AggregateFunction.Count,
-                    _ => AggregateFunction.Count
-                };
-                
-                // CORRECTION: Gérer correctement les groupes selon le pattern
-                if (pattern.Contains("property"))
-                {
-                    // Pattern: "avg persons property salary" -> Groups[1]=function, Groups[2]=label, Groups[3]=property
-                    parsedQuery.AggregateProperty = match.Groups[3].Value;
-                    parsedQuery.NodeLabel = NormalizeLabel(match.Groups[2].Value);
-                }
-                else if (pattern.Contains("from"))
-                {
-                    // Pattern: "avg salary from persons" -> Groups[1]=function, Groups[2]=property, Groups[3]=label
-                    parsedQuery.AggregateProperty = match.Groups[2].Value;
-                    parsedQuery.NodeLabel = NormalizeLabel(match.Groups[3].Value);
-                }
-                else
-                {
-                    // Pattern: "avg persons salary" -> Groups[1]=function, Groups[2]=label, Groups[3]=property
-                    parsedQuery.AggregateProperty = match.Groups[3].Value;
-                    parsedQuery.NodeLabel = NormalizeLabel(match.Groups[2].Value);
-                }
-                
-                if (!string.IsNullOrEmpty(conditionsText))
-                {
-                    ParseConditions(conditionsText, parsedQuery.Conditions);
-                }
-            }
+                        parsedQuery.Type = QueryType.Aggregate;
+                        parsedQuery.AggregateFunction = functionName switch
+                        {
+                            "sum" => AggregateFunction.Sum,
+                            "avg" => AggregateFunction.Avg,
+                            "min" => AggregateFunction.Min,
+                            "max" => AggregateFunction.Max,
+                            "count" => AggregateFunction.Count,
+                            _ => AggregateFunction.Count
+                        };
+                        
+                        // CORRECTION: Gérer correctement les groupes selon le pattern
+                        if (pattern.Contains("property"))
+                        {
+                            // Pattern: "avg persons property salary" -> Groups[1]=function, Groups[2]=label, Groups[3]=property
+                            parsedQuery.AggregateProperty = match.Groups[3].Value;
+                            parsedQuery.NodeLabel = NormalizeLabel(match.Groups[2].Value);
+                        }
+                        else if (pattern.Contains("from"))
+                        {
+                            // Pattern: "avg salary from persons" -> Groups[1]=function, Groups[2]=property, Groups[3]=label
+                            parsedQuery.AggregateProperty = match.Groups[2].Value;
+                            parsedQuery.NodeLabel = NormalizeLabel(match.Groups[3].Value);
+                        }
+                        else
+                        {
+                            // Pattern: "avg persons salary" -> Groups[1]=function, Groups[2]=label, Groups[3]=property
+                            parsedQuery.AggregateProperty = match.Groups[3].Value;
+                            parsedQuery.NodeLabel = NormalizeLabel(match.Groups[2].Value);
+                        }
+                        
+                        Console.WriteLine($"DEBUG: Parsed as AGGREGATE - Function: {parsedQuery.AggregateFunction}, Property: {parsedQuery.AggregateProperty}, Label: {parsedQuery.NodeLabel}");
+                        
+                        if (!string.IsNullOrEmpty(conditionsText))
+                        {
+                            ParseConditions(conditionsText, parsedQuery.Conditions);
+                        }
+                    }
                     else if (pattern.Contains("find"))
                     {
                         // Pattern 5: FIND
                         parsedQuery.NodeLabel = NormalizeLabel(match.Groups[1].Value);
                         parsedQuery.Type = QueryType.FindNodes;
+                        
+                        Console.WriteLine($"DEBUG: Parsed as FIND - Label: {parsedQuery.NodeLabel}");
                         
                         if (match.Groups.Count > 2 && !string.IsNullOrEmpty(match.Groups[2].Value))
                         {
@@ -2497,6 +3101,8 @@ public class NaturalLanguageParser
                         // Pattern 6: COUNT
                         parsedQuery.NodeLabel = NormalizeLabel(match.Groups[1].Value);
                         parsedQuery.Type = QueryType.Count;
+                        
+                        Console.WriteLine($"DEBUG: Parsed as COUNT - Label: {parsedQuery.NodeLabel}");
                         
                         if (match.Groups.Count > 2 && !string.IsNullOrEmpty(match.Groups[2].Value))
                         {
@@ -2510,9 +3116,11 @@ public class NaturalLanguageParser
                         parsedQuery.NodeLabel = NormalizeLabel(match.Groups[2].Value);
                         parsedQuery.Type = QueryType.FindNodes;
                         
+                        Console.WriteLine($"DEBUG: Parsed as SELECT - Property: {parsedQuery.SubQueryProperty}, Label: {parsedQuery.NodeLabel}");
+                        
                         if (match.Groups.Count > 3 && !string.IsNullOrEmpty(match.Groups[3].Value))
                         {
-                            ParseConditions(match.Groups[3].Value, parsedQuery.Conditions);
+                            ParseSimpleConditions(match.Groups[3].Value, parsedQuery.Conditions);
                         }
                     }
                     
@@ -2520,12 +3128,15 @@ public class NaturalLanguageParser
                 }
             }
 
+            Console.WriteLine($"DEBUG: No patterns matched for subquery: '{query}'");
+            
             // Si aucun pattern ne correspond, essayer un parsing simple
             var simpleMatch = Regex.Match(query, @"(\w+)", RegexOptions.IgnoreCase);
             if (simpleMatch.Success)
             {
                 parsedQuery.NodeLabel = NormalizeLabel(simpleMatch.Groups[1].Value);
                 parsedQuery.Type = QueryType.FindNodes;
+                Console.WriteLine($"DEBUG: Fallback parsing - Label: {parsedQuery.NodeLabel}");
             }
             else
             {
@@ -2543,61 +3154,45 @@ public class NaturalLanguageParser
     /// </summary>
     private void ParseDynamicProperties(string propertiesText, Dictionary<string, object> properties)
     {
-        // Essayer d'abord l'approche manuelle qui fonctionne mieux pour les cas complexes
-        ParsePropertiesManual(propertiesText, properties);
+        Console.WriteLine($"DEBUG: ParseDynamicProperties - Input: '{propertiesText}'");
         
-        // Si l'approche manuelle n'a rien trouvé, essayer les autres approches
-        if (properties.Count == 0)
+        // Approche simple et directe : diviser par " and " et parser chaque partie
+        var parts = propertiesText.Split(new[] { " and " }, StringSplitOptions.RemoveEmptyEntries);
+        
+        foreach (var part in parts)
         {
-            // Pattern amélioré pour supporter les propriétés multiples avec valeurs complexes
-            // Gère : property1 value1 property2 "value with spaces" property3 value3
-            var matches = Regex.Matches(propertiesText, @"(\w+)\s+([^\s](?:[^a]|a(?!nd\s))*?)(?:\s+and\s|$)", RegexOptions.IgnoreCase);
+            var trimmedPart = part.Trim();
+            var spaceIndex = trimmedPart.IndexOf(' ');
             
-            // Si le pattern complexe échoue, essayer le pattern simple pour les propriétés multiples
-            if (matches.Count == 0)
+            if (spaceIndex > 0)
             {
-                // Pattern amélioré pour les propriétés multiples : "property1 value1 property2 value2"
-                // Ce pattern capture correctement les valeurs avec espaces
-                var propertyMatches = Regex.Matches(propertiesText, @"(\w+)\s+([^\s]+(?:\s+[^\s]+)*?)(?=\s+\w+\s|$)");
+                var key = trimmedPart.Substring(0, spaceIndex);
+                var value = trimmedPart.Substring(spaceIndex + 1).Trim();
                 
-                // Si ce pattern ne fonctionne pas, essayer une approche plus robuste
-                if (propertyMatches.Count == 0)
+                Console.WriteLine($"DEBUG: Parsing part '{trimmedPart}' -> key: '{key}', value: '{value}'");
+                
+                // Supprimer les guillemets si présents
+                if (value.StartsWith("\"") && value.EndsWith("\""))
                 {
-                    // Approche par parsing manuel pour les cas complexes
-                    ParsePropertiesManually(propertiesText, properties);
+                    value = value.Substring(1, value.Length - 2);
                 }
-                else
+                
+                // Parser la valeur
+                try
                 {
-                    foreach (Match match in propertyMatches)
-                    {
-                        var key = match.Groups[1].Value;
-                        var value = ParseDynamicValue(match.Groups[2].Value.Trim());
-                        properties[key] = value;
-                    }
+                    properties[key] = ParseDynamicValue(value);
+                    Console.WriteLine($"DEBUG: Added property: {key} = {properties[key]}");
                 }
-            }
-            else
-            {
-                foreach (Match match in matches)
+                catch (Exception ex)
                 {
-                    var key = match.Groups[1].Value;
-                    var value = ParseDynamicValue(match.Groups[2].Value.Trim());
+                    // En cas d'erreur, utiliser la valeur brute
                     properties[key] = value;
+                    Console.WriteLine($"DEBUG: Added property (fallback): {key} = {value}");
                 }
-            }
-            
-            // Si aucun match, essayer une approche alternative pour les cas complexes
-            if (properties.Count == 0)
-            {
-                ParseDynamicPropertiesAlternative(propertiesText, properties);
-            }
-            
-            // Si toujours aucun résultat, essayer l'approche robuste
-            if (properties.Count == 0)
-            {
-                ParsePropertiesRobust(propertiesText, properties);
             }
         }
+        
+        Console.WriteLine($"DEBUG: Final properties: {string.Join(", ", properties.Select(kv => $"{kv.Key}={kv.Value}"))}");
     }
 
     /// <summary>
@@ -2605,42 +3200,50 @@ public class NaturalLanguageParser
     /// </summary>
     private void ParsePropertiesManually(string propertiesText, Dictionary<string, object> properties)
     {
-        var words = propertiesText.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        var i = 0;
+        Console.WriteLine($"DEBUG: ParsePropertiesManually - Input: '{propertiesText}'");
         
-        while (i < words.Length)
+        // Diviser par " and " pour traiter chaque propriété séparément
+        var parts = propertiesText.Split(new[] { " and " }, StringSplitOptions.RemoveEmptyEntries);
+        
+        Console.WriteLine($"DEBUG: Split parts: {string.Join(" | ", parts)}");
+        
+        foreach (var part in parts)
         {
-            var key = words[i];
-            i++;
+            var trimmedPart = part.Trim();
+            var spaceIndex = trimmedPart.IndexOf(' ');
             
-            if (i >= words.Length) break;
+            Console.WriteLine($"DEBUG: Processing part: '{trimmedPart}', spaceIndex: {spaceIndex}");
             
-            // Collecter la valeur jusqu'au prochain mot qui ressemble à une clé
-            var valueParts = new List<string>();
-            
-            while (i < words.Length)
+            if (spaceIndex > 0)
             {
-                var word = words[i];
+                var key = trimmedPart.Substring(0, spaceIndex);
+                var value = trimmedPart.Substring(spaceIndex + 1).Trim();
                 
-                // Si le mot suivant ressemble à une clé (pas de chiffres au début), arrêter
-                if (char.IsLetter(word[0]) && !char.IsDigit(word[0]) && 
-                    !word.Equals("and", StringComparison.OrdinalIgnoreCase) &&
-                    !word.Equals("with", StringComparison.OrdinalIgnoreCase) &&
-                    !word.Equals("type", StringComparison.OrdinalIgnoreCase))
+                Console.WriteLine($"DEBUG: Extracted key: '{key}', value: '{value}'");
+                
+                // Supprimer les guillemets si présents
+                if (value.StartsWith("\"") && value.EndsWith("\""))
                 {
-                    break;
+                    value = value.Substring(1, value.Length - 2);
                 }
                 
-                valueParts.Add(word);
-                i++;
-            }
-            
-            if (valueParts.Count > 0)
-            {
-                var value = string.Join(" ", valueParts);
-                properties[key] = ParseDynamicValue(value);
+                // Parser la valeur
+                try
+                {
+                    properties[key] = ParseDynamicValue(value);
+                    Console.WriteLine($"DEBUG: Added property: {key} = {properties[key]}");
+                }
+                catch (Exception ex)
+                {
+                    // En cas d'erreur, utiliser la valeur brute
+                    properties[key] = value;
+                    Console.WriteLine($"DEBUG: Added property (fallback): {key} = {value}");
+                }
             }
         }
+        
+        // Debug: afficher les propriétés parsées
+        Console.WriteLine($"DEBUG: Final parsed properties: {string.Join(", ", properties.Select(kv => $"{kv.Key}={kv.Value}"))}");
     }
 
     /// <summary>
@@ -2815,8 +3418,15 @@ public class NaturalLanguageParser
             return boolValue;
         }
         
-        // Sinon, c'est une chaîne (enlever les guillemets si présents)
-        return inputValue.Trim('"', '\'');
+        // Sinon, c'est une chaîne (enlever les guillemets et caractères parasites si présents)
+        var cleanedValue = inputValue.Trim('"', '\'', ' ', '\t', '\n', '\r');
+        // Enlever aussi les accolades et autres caractères parasites
+        cleanedValue = cleanedValue.Trim('{', '}', '[', ']');
+        // Enlever les caractères parasites supplémentaires
+        cleanedValue = cleanedValue.Trim('"', '\'', ' ', '\t', '\n', '\r');
+        // Enlever les caractères parasites à la fin (comme les virgules et guillemets)
+        cleanedValue = cleanedValue.TrimEnd(',', '"', '\'', ' ', '\t', '\n', '\r');
+        return cleanedValue;
     }
 
     /// <summary>
@@ -2911,6 +3521,48 @@ public class NaturalLanguageParser
 
     private void ParseConditions(string conditionsText, Dictionary<string, object> conditions)
     {
+        if (string.IsNullOrWhiteSpace(conditionsText))
+            return;
+
+        // Vérifier si la condition contient des patterns de sous-requêtes
+        var subQueryPatterns = new[]
+        {
+            "exists in",
+            "not exists in", 
+            "exists where",
+            "not exists where",
+            "in select",
+            "not in select",
+            "any in",
+            "all in",
+            "gt avg",
+            "lt avg",
+            "gt max",
+            "lt max",
+            "gt min",
+            "lt min"
+        };
+
+        bool hasSubQueryPattern = subQueryPatterns.Any(pattern => 
+            conditionsText.Contains(pattern, StringComparison.OrdinalIgnoreCase));
+
+        if (hasSubQueryPattern)
+        {
+            // Utiliser le parser de sous-requêtes complexes
+            ParseConditionsWithSubQueries(conditionsText, conditions, null);
+            return;
+        }
+
+        // Utiliser le parsing simple des conditions
+        ParseSimpleConditions(conditionsText, conditions);
+    }
+
+    /// <summary>
+    /// Parse les conditions simples sans sous-requêtes (pour éviter la récursion infinie)
+    /// </summary>
+    private void ParseSimpleConditions(string conditionsText, Dictionary<string, object> conditions)
+    {
+
         // Pattern amélioré pour supporter AND et OR
         // Ex: "age > 25 and name = John or status = active"
         var parts = SplitConditions(conditionsText);
@@ -2921,7 +3573,7 @@ public class NaturalLanguageParser
         foreach (var part in parts)
         {
             // Pattern étendu pour supporter les fonctions de chaînes et opérateurs avancés
-            // Correction : inclure les underscores dans les noms d'opérateurs
+            // Correction : inclure les underscores dans les noms d'opérateurs et les guillemets simples
             var match = Regex.Match(part.Condition, @"(\w+)\s*(like|starts_with|ends_with|contains|upper|lower|trim|length|substring|replace|[><=!]+)\s*(.+)");
             
             if (match.Success)
