@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("Graphqlite")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+c3e659db5f44655bce61c8afe0dbf78409352e5f")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+783fdfff1facb950f4173339ceeffa7d2d625e80")]
 [assembly: System.Reflection.AssemblyProductAttribute("Graphqlite")]
 [assembly: System.Reflection.AssemblyTitleAttribute("Graphqlite")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

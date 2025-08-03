@@ -66,6 +66,14 @@ public class ParsedQuery
     public string? JoinType { get; set; } // "inner", "left", "right", "full"
     public string? JoinCondition { get; set; }
     
+    // Propriétés pour le groupement et tri
+    public List<string> GroupByProperties { get; set; } = new();
+    public List<OrderByClause> OrderByClauses { get; set; } = new();
+    public Dictionary<string, object> HavingConditions { get; set; } = new();
+    public bool HasGroupBy => GroupByProperties.Count > 0;
+    public bool HasOrderBy => OrderByClauses.Count > 0;
+    public bool HasHaving => HavingConditions.Count > 0;
+    
     // Propriétés pour la validation et les erreurs
     public List<string> ValidationErrors { get; set; } = new();
     public bool IsValid => !ValidationErrors.Any();
@@ -193,7 +201,10 @@ public enum QueryType
     SubQuery,
     BulkInsert,
     Transaction,
-    VirtualJoin
+    VirtualJoin,
+    GroupBy,
+    OrderBy,
+    Having
 }
 
 /// <summary>
@@ -239,4 +250,22 @@ public enum SubQueryOperator
     Any,
     All,
     None
+}
+
+/// <summary>
+/// Représente une clause ORDER BY
+/// </summary>
+public class OrderByClause
+{
+    public string Property { get; set; } = string.Empty;
+    public OrderDirection Direction { get; set; } = OrderDirection.Ascending;
+}
+
+/// <summary>
+/// Direction de tri
+/// </summary>
+public enum OrderDirection
+{
+    Ascending,
+    Descending
 }

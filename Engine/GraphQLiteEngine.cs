@@ -91,6 +91,9 @@ public class GraphQLiteEngine : IDisposable
             QueryType.DefineVariable => DefineVariableAsync(query),
             QueryType.BatchOperation => ExecuteBatchOperationAsync(query),
             QueryType.VirtualJoin => ExecuteVirtualJoinAsync(query),
+            QueryType.GroupBy => ExecuteGroupByAsync(query),
+            QueryType.OrderBy => ExecuteOrderByAsync(query),
+            QueryType.Having => ExecuteHavingAsync(query),
             QueryType.ShowSchema => ShowSchemaAsync(),
             _ => throw new NotSupportedException($"Type de requête non supporté : {query.Type}")
         };
@@ -3683,6 +3686,273 @@ public class GraphQLiteEngine : IDisposable
         }
 
         return targetNodes;
+    }
+
+    /// <summary>
+    /// Exécute une requête de groupement
+    /// </summary>
+    private async Task<QueryResult> ExecuteGroupByAsync(ParsedQuery query)
+    {
+        try
+        {
+            var normalizedLabel = NormalizeLabel(query.NodeLabel ?? "node");
+            var nodes = _storage.GetNodesByLabel(normalizedLabel);
+            
+            // Filtrer par conditions si présentes
+            if (query.Conditions.Count > 0)
+            {
+                nodes = await FilterNodesByConditionsAsync(nodes, query.Conditions);
+            }
+            
+            // Grouper les nœuds par les propriétés spécifiées
+            var groupedNodes = nodes.GroupBy(node =>
+            {
+                var groupKey = new Dictionary<string, object>();
+                foreach (var property in query.GroupByProperties)
+                {
+                    if (node.Properties.TryGetValue(property, out var value))
+                    {
+                        groupKey[property] = value;
+                    }
+                    else
+                    {
+                        groupKey[property] = null;
+                    }
+                }
+                return groupKey;
+            }).ToList();
+            
+            // Appliquer les conditions HAVING si présentes
+            if (query.HasHaving)
+            {
+                groupedNodes = ApplyHavingConditions(groupedNodes, query.HavingConditions);
+            }
+            
+            // Préparer le résultat
+            var result = new List<object>();
+            foreach (var group in groupedNodes)
+            {
+                var groupResult = new Dictionary<string, object>
+                {
+                    ["group_key"] = group.Key,
+                    ["count"] = group.Count(),
+                    ["nodes"] = group.ToList()
+                };
+                
+                // Ajouter les agrégations pour chaque groupe
+                foreach (var property in query.GroupByProperties)
+                {
+                    var values = group.Select(n => n.Properties.TryGetValue(property, out var v) ? v : null)
+                                    .Where(v => v != null)
+                                    .ToList();
+                    
+                    if (values.Any())
+                    {
+                        var comparableValues = values.OfType<IComparable>().ToList();
+                        if (comparableValues.Any())
+                        {
+                            groupResult[$"avg_{property}"] = values.OfType<double>().Any() ? 
+                                values.OfType<double>().Average() : null;
+                            groupResult[$"min_{property}"] = comparableValues.Min();
+                            groupResult[$"max_{property}"] = comparableValues.Max();
+                        }
+                    }
+                }
+                
+                result.Add(groupResult);
+            }
+            
+            return new QueryResult
+            {
+                Success = true,
+                Message = $"Groupement de {nodes.Count} nœuds par {string.Join(", ", query.GroupByProperties)} : {groupedNodes.Count} groupes",
+                Data = result
+            };
+        }
+        catch (Exception ex)
+        {
+            return new QueryResult
+            {
+                Success = false,
+                Error = $"Erreur lors du groupement : {ex.Message}"
+            };
+        }
+    }
+
+    /// <summary>
+    /// Exécute une requête de tri
+    /// </summary>
+    private async Task<QueryResult> ExecuteOrderByAsync(ParsedQuery query)
+    {
+        try
+        {
+            var normalizedLabel = NormalizeLabel(query.NodeLabel ?? "node");
+            var nodes = _storage.GetNodesByLabel(normalizedLabel);
+            
+            // Filtrer par conditions si présentes
+            if (query.Conditions.Count > 0)
+            {
+                nodes = await FilterNodesByConditionsAsync(nodes, query.Conditions);
+            }
+            
+            // Trier les nœuds selon les clauses ORDER BY
+            var sortedNodes = nodes.AsEnumerable();
+            
+            foreach (var orderByClause in query.OrderByClauses)
+            {
+                sortedNodes = orderByClause.Direction == OrderDirection.Ascending
+                    ? sortedNodes.OrderBy(n => GetNodeValueForSorting(n, orderByClause.Property))
+                    : sortedNodes.OrderByDescending(n => GetNodeValueForSorting(n, orderByClause.Property));
+            }
+            
+            var result = sortedNodes.ToList();
+            
+            return new QueryResult
+            {
+                Success = true,
+                Message = $"Tri de {result.Count} nœuds par {string.Join(", ", query.OrderByClauses.Select(c => $"{c.Property} {c.Direction}"))}",
+                Data = result
+            };
+        }
+        catch (Exception ex)
+        {
+            return new QueryResult
+            {
+                Success = false,
+                Error = $"Erreur lors du tri : {ex.Message}"
+            };
+        }
+    }
+
+    /// <summary>
+    /// Exécute une requête HAVING
+    /// </summary>
+    private async Task<QueryResult> ExecuteHavingAsync(ParsedQuery query)
+    {
+        try
+        {
+            // HAVING est généralement utilisé avec GROUP BY, donc on retourne une erreur si utilisé seul
+            return new QueryResult
+            {
+                Success = false,
+                Error = "HAVING doit être utilisé avec GROUP BY. Utilisez 'group [label] by [property] having [condition]'"
+            };
+        }
+        catch (Exception ex)
+        {
+            return new QueryResult
+            {
+                Success = false,
+                Error = $"Erreur lors de l'exécution de HAVING : {ex.Message}"
+            };
+        }
+    }
+
+    /// <summary>
+    /// Applique les conditions HAVING sur les groupes
+    /// </summary>
+    private List<IGrouping<Dictionary<string, object>, Node>> ApplyHavingConditions(
+        List<IGrouping<Dictionary<string, object>, Node>> groups, 
+        Dictionary<string, object> havingConditions)
+    {
+        return groups.Where(group =>
+        {
+            foreach (var condition in havingConditions)
+            {
+                var conditionKey = condition.Key.ToLowerInvariant();
+                var expectedValue = condition.Value;
+                
+                // Évaluer la condition sur le groupe
+                if (conditionKey == "count")
+                {
+                    var count = group.Count();
+                    if (!EvaluateComparison(count, expectedValue))
+                        return false;
+                }
+                else if (conditionKey.StartsWith("avg_"))
+                {
+                    var property = conditionKey.Substring(4);
+                    var values = group.Select(n => n.Properties.TryGetValue(property, out var v) ? v : null)
+                                    .Where(v => v != null && v is IComparable)
+                                    .Cast<IComparable>()
+                                    .ToList();
+                    
+                    if (values.Any())
+                    {
+                        var avg = values.OfType<double>().Average();
+                        if (!EvaluateComparison(avg, expectedValue))
+                            return false;
+                    }
+                }
+                else if (conditionKey.StartsWith("min_"))
+                {
+                    var property = conditionKey.Substring(4);
+                    var values = group.Select(n => n.Properties.TryGetValue(property, out var v) ? v : null)
+                                    .Where(v => v != null && v is IComparable)
+                                    .Cast<IComparable>()
+                                    .ToList();
+                    
+                    if (values.Any())
+                    {
+                        var min = values.Min();
+                        if (!EvaluateComparison(min, expectedValue))
+                            return false;
+                    }
+                }
+                else if (conditionKey.StartsWith("max_"))
+                {
+                    var property = conditionKey.Substring(4);
+                    var values = group.Select(n => n.Properties.TryGetValue(property, out var v) ? v : null)
+                                    .Where(v => v != null && v is IComparable)
+                                    .Cast<IComparable>()
+                                    .ToList();
+                    
+                    if (values.Any())
+                    {
+                        var max = values.Max();
+                        if (!EvaluateComparison(max, expectedValue))
+                            return false;
+                    }
+                }
+            }
+            return true;
+        }).ToList();
+    }
+
+    /// <summary>
+    /// Obtient la valeur d'un nœud pour le tri
+    /// </summary>
+    private object GetNodeValueForSorting(Node node, string property)
+    {
+        if (node.Properties.TryGetValue(property, out var value))
+        {
+            return value ?? "";
+        }
+        return "";
+    }
+
+    /// <summary>
+    /// Évalue une comparaison pour les conditions HAVING
+    /// </summary>
+    private bool EvaluateComparison(object actual, object expected)
+    {
+        if (actual == null || expected == null)
+            return actual == expected;
+        
+        if (actual is IComparable comparable && expected is IComparable expectedComparable)
+        {
+            try
+            {
+                var comparison = comparable.CompareTo(expectedComparable);
+                return comparison == 0; // Pour l'égalité, on peut étendre pour d'autres opérateurs
+            }
+            catch
+            {
+                return false;
+            }
+        }
+        
+        return actual.Equals(expected);
     }
 }
 /// <summary>

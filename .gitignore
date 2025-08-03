@@ -3,3 +3,4 @@ bin
 *.gqlite
 *.gqls 
 config 
+.DS_Store

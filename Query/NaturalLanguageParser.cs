@@ -58,7 +58,13 @@ public class NaturalLanguageParser
         { "join", QueryType.VirtualJoin },
         { "virtual", QueryType.VirtualJoin },
         { "merge", QueryType.VirtualJoin },
-        { "combine", QueryType.VirtualJoin }
+        { "combine", QueryType.VirtualJoin },
+        { "group", QueryType.GroupBy },
+        { "groupby", QueryType.GroupBy },
+        { "order", QueryType.OrderBy },
+        { "orderby", QueryType.OrderBy },
+        { "sort", QueryType.OrderBy },
+        { "having", QueryType.Having }
     };
 
     /// <summary>
@@ -129,6 +135,15 @@ public class NaturalLanguageParser
                 break;
             case QueryType.VirtualJoin:
                 ParseVirtualJoin(queryForParsing, parsedQuery);
+                break;
+            case QueryType.GroupBy:
+                ParseGroupBy(queryForParsing, parsedQuery);
+                break;
+            case QueryType.OrderBy:
+                ParseOrderBy(queryForParsing, parsedQuery);
+                break;
+            case QueryType.Having:
+                ParseHaving(queryForParsing, parsedQuery);
                 break;
             case QueryType.ShowSchema:
                 // Pour les commandes de schéma, aucune autre information n'est nécessaire
@@ -4070,5 +4085,123 @@ public class NaturalLanguageParser
             throw new ArgumentException($"Format de jointure virtuelle non reconnu : {query}");
         }
     }
+
+    /// <summary>
+    /// Parse les requêtes de groupement
+    /// Exemples :
+    /// - group persons by age
+    /// - group persons by age, city
+    /// - group persons by age having count > 5
+    /// </summary>
+    private void ParseGroupBy(string query, ParsedQuery parsedQuery)
+    {
+        // Pattern pour group by avec conditions WHERE et HAVING
+        var groupByPattern = @"group\s+(\w+)\s+by\s+(.+?)(?:\s+where\s+(.+?))?(?:\s+having\s+(.+))?$";
+        var match = Regex.Match(query, groupByPattern, RegexOptions.IgnoreCase);
+        
+        if (match.Success)
+        {
+            parsedQuery.NodeLabel = match.Groups[1].Value;
+            
+            // Parser les propriétés de groupement
+            var groupByProperties = match.Groups[2].Value.Split(',')
+                .Select(p => p.Trim())
+                .Where(p => !string.IsNullOrEmpty(p))
+                .ToList();
+            
+            parsedQuery.GroupByProperties.AddRange(groupByProperties);
+            
+            // Parser les conditions WHERE si présentes
+            if (match.Groups.Count > 3 && !string.IsNullOrEmpty(match.Groups[3].Value))
+            {
+                ParseConditions(match.Groups[3].Value, parsedQuery.Conditions);
+            }
+            
+            // Parser les conditions HAVING si présentes
+            if (match.Groups.Count > 4 && !string.IsNullOrEmpty(match.Groups[4].Value))
+            {
+                ParseConditions(match.Groups[4].Value, parsedQuery.HavingConditions);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Parse les requêtes de tri
+    /// Exemples :
+    /// - order persons by age
+    /// - order persons by age desc
+    /// - order persons by age, name asc
+    /// - sort persons by salary desc, name asc
+    /// </summary>
+    private void ParseOrderBy(string query, ParsedQuery parsedQuery)
+    {
+        // Pattern pour order by avec conditions WHERE
+        var orderByPattern = @"(?:order|sort)\s+(\w+)\s+by\s+(.+?)(?:\s+where\s+(.+?))?(?:\s+(asc|desc))?$";
+        var match = Regex.Match(query, orderByPattern, RegexOptions.IgnoreCase);
+        
+        if (match.Success)
+        {
+            parsedQuery.NodeLabel = match.Groups[1].Value;
+            
+            // Parser les clauses de tri
+            var orderByClauses = match.Groups[2].Value.Split(',')
+                .Select(c => c.Trim())
+                .Where(c => !string.IsNullOrEmpty(c))
+                .ToList();
+            
+            foreach (var clause in orderByClauses)
+            {
+                var orderByClause = new OrderByClause();
+                
+                // Vérifier si la direction est spécifiée dans la clause
+                var directionMatch = Regex.Match(clause, @"(.+?)\s+(asc|desc)$", RegexOptions.IgnoreCase);
+                if (directionMatch.Success)
+                {
+                    orderByClause.Property = directionMatch.Groups[1].Value.Trim();
+                    orderByClause.Direction = directionMatch.Groups[2].Value.ToLowerInvariant() == "desc" 
+                        ? OrderDirection.Descending 
+                        : OrderDirection.Ascending;
+                }
+                else
+                {
+                    orderByClause.Property = clause;
+                    // Direction par défaut depuis le match principal
+                    if (match.Groups.Count > 4 && !string.IsNullOrEmpty(match.Groups[4].Value))
+                    {
+                        orderByClause.Direction = match.Groups[4].Value.ToLowerInvariant() == "desc" 
+                            ? OrderDirection.Descending 
+                            : OrderDirection.Ascending;
+                    }
+                }
+                
+                parsedQuery.OrderByClauses.Add(orderByClause);
+            }
+            
+            // Parser les conditions WHERE si présentes
+            if (match.Groups.Count > 3 && !string.IsNullOrEmpty(match.Groups[3].Value))
+            {
+                ParseConditions(match.Groups[3].Value, parsedQuery.Conditions);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Parse les requêtes HAVING
+    /// Exemples :
+    /// - having count > 5
+    /// - having avg age > 30
+    /// </summary>
+    private void ParseHaving(string query, ParsedQuery parsedQuery)
+    {
+        // Pattern pour having
+        var havingPattern = @"having\s+(.+)$";
+        var match = Regex.Match(query, havingPattern, RegexOptions.IgnoreCase);
+        
+        if (match.Success)
+        {
+            ParseConditions(match.Groups[1].Value, parsedQuery.HavingConditions);
+        }
+    }
 }
+
 
