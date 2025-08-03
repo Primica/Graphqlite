@@ -64,7 +64,23 @@ public class NaturalLanguageParser
         { "order", QueryType.OrderBy },
         { "orderby", QueryType.OrderBy },
         { "sort", QueryType.OrderBy },
-        { "having", QueryType.Having }
+        { "having", QueryType.Having },
+        { "row_number", QueryType.WindowFunction },
+        { "rownumber", QueryType.WindowFunction },
+        { "rank", QueryType.WindowFunction },
+        { "dense_rank", QueryType.WindowFunction },
+        { "denserank", QueryType.WindowFunction },
+        { "percent_rank", QueryType.WindowFunction },
+        { "percentrank", QueryType.WindowFunction },
+        { "ntile", QueryType.WindowFunction },
+        { "lead", QueryType.WindowFunction },
+        { "lag", QueryType.WindowFunction },
+        { "first_value", QueryType.WindowFunction },
+        { "firstvalue", QueryType.WindowFunction },
+        { "last_value", QueryType.WindowFunction },
+        { "lastvalue", QueryType.WindowFunction },
+        { "nth_value", QueryType.WindowFunction },
+        { "nthvalue", QueryType.WindowFunction }
     };
 
     /// <summary>
@@ -145,6 +161,9 @@ public class NaturalLanguageParser
             case QueryType.Having:
                 ParseHaving(queryForParsing, parsedQuery);
                 break;
+            case QueryType.WindowFunction:
+                ParseWindowFunction(queryForParsing, parsedQuery);
+                break;
             case QueryType.ShowSchema:
                 // Pour les commandes de schéma, aucune autre information n'est nécessaire
                 break;
@@ -201,6 +220,12 @@ public class NaturalLanguageParser
     {
         var words = query.Split(' ');
         var firstWord = words[0];
+        
+        // Cas spéciaux pour les fonctions de fenêtre
+        if (query.Contains("() over ("))
+        {
+            return QueryType.WindowFunction;
+        }
         
         // Cas spéciaux pour les opérations en lot
         if (firstWord == "create" && words.Length > 2 && words[1] == "batch" && words[2] == "of")
@@ -4200,6 +4225,86 @@ public class NaturalLanguageParser
         if (match.Success)
         {
             ParseConditions(match.Groups[1].Value, parsedQuery.HavingConditions);
+        }
+    }
+
+    /// <summary>
+    /// Parse les requêtes de fonctions de fenêtre
+    /// Exemples :
+    /// - row_number() over (partition by city order by salary desc)
+    /// - rank() over (partition by role order by age)
+    /// - dense_rank() over (order by salary desc)
+    /// </summary>
+    private void ParseWindowFunction(string query, ParsedQuery parsedQuery)
+    {
+        // Pattern pour les fonctions de fenêtre
+        var windowPattern = @"(\w+(?:_\w+)?)\s*\(\s*\)\s+over\s*\(\s*(?:partition\s+by\s+([^)]+))?\s*(?:order\s+by\s+([^)]+))?\s*\)";
+        var match = Regex.Match(query, windowPattern, RegexOptions.IgnoreCase);
+        
+        if (match.Success)
+        {
+            // Déterminer le type de fonction de fenêtre
+            var functionName = match.Groups[1].Value.ToLowerInvariant();
+            parsedQuery.WindowFunctionType = functionName switch
+            {
+                "row_number" or "rownumber" => WindowFunctionType.RowNumber,
+                "rank" => WindowFunctionType.Rank,
+                "dense_rank" or "denserank" => WindowFunctionType.DenseRank,
+                "percent_rank" or "percentrank" => WindowFunctionType.PercentRank,
+                "ntile" => WindowFunctionType.Ntile,
+                "lead" => WindowFunctionType.Lead,
+                "lag" => WindowFunctionType.Lag,
+                "first_value" or "firstvalue" => WindowFunctionType.FirstValue,
+                "last_value" or "lastvalue" => WindowFunctionType.LastValue,
+                "nth_value" or "nthvalue" => WindowFunctionType.NthValue,
+                _ => throw new ArgumentException($"Fonction de fenêtre non reconnue : {functionName}")
+            };
+            
+            // Parser la clause PARTITION BY si présente
+            if (match.Groups.Count > 2 && !string.IsNullOrEmpty(match.Groups[2].Value))
+            {
+                var partitionByProperties = match.Groups[2].Value.Split(',')
+                    .Select(p => p.Trim())
+                    .Where(p => !string.IsNullOrEmpty(p))
+                    .ToList();
+                
+                parsedQuery.WindowPartitionBy.AddRange(partitionByProperties);
+            }
+            
+            // Parser la clause ORDER BY si présente
+            if (match.Groups.Count > 3 && !string.IsNullOrEmpty(match.Groups[3].Value))
+            {
+                var orderByClauses = match.Groups[3].Value.Split(',')
+                    .Select(c => c.Trim())
+                    .Where(c => !string.IsNullOrEmpty(c))
+                    .ToList();
+                
+                foreach (var clause in orderByClauses)
+                {
+                    var orderByClause = new OrderByClause();
+                    
+                    // Vérifier si la direction est spécifiée dans la clause
+                    var directionMatch = Regex.Match(clause, @"(.+?)\s+(asc|desc)$", RegexOptions.IgnoreCase);
+                    if (directionMatch.Success)
+                    {
+                        orderByClause.Property = directionMatch.Groups[1].Value.Trim();
+                        orderByClause.Direction = directionMatch.Groups[2].Value.ToLower() == "desc" 
+                            ? OrderDirection.Descending 
+                            : OrderDirection.Ascending;
+                    }
+                    else
+                    {
+                        orderByClause.Property = clause;
+                        orderByClause.Direction = OrderDirection.Ascending;
+                    }
+                    
+                    parsedQuery.WindowOrderBy.Add(orderByClause);
+                }
+            }
+        }
+        else
+        {
+            throw new ArgumentException($"Format de fonction de fenêtre non reconnu : {query}");
         }
     }
 }

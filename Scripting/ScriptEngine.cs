@@ -348,10 +348,27 @@ public class ScriptEngine
                     "select", "subquery", "let", "set", "var", "define", "add", "get", 
                     "search", "link", "relate", "modify", "remove", "path", "describe", 
                     "schema", "join", "virtual", "merge", "combine", "group", "order", 
-                    "sort", "having" 
+                    "sort", "having", "row_number", "rownumber", "rank", "dense_rank", 
+                    "denserank", "percent_rank", "percentrank", "ntile", "lead", "lag", 
+                    "first_value", "firstvalue", "last_value", "lastvalue", "nth_value", 
+                    "nthvalue" 
                 };
                 
-                if (!validCommands.Contains(firstWord))
+                // Vérification spéciale pour les fonctions de fenêtre
+                var trimmedContent = query.Content.Trim().ToLowerInvariant();
+                var isWindowFunction = trimmedContent.Contains("() over (") || 
+                                     trimmedContent.StartsWith("row_number()") ||
+                                     trimmedContent.StartsWith("rank()") ||
+                                     trimmedContent.StartsWith("dense_rank()") ||
+                                     trimmedContent.StartsWith("percent_rank()") ||
+                                     trimmedContent.StartsWith("ntile()") ||
+                                     trimmedContent.StartsWith("lead()") ||
+                                     trimmedContent.StartsWith("lag()") ||
+                                     trimmedContent.StartsWith("first_value()") ||
+                                     trimmedContent.StartsWith("last_value()") ||
+                                     trimmedContent.StartsWith("nth_value()");
+                
+                if (!validCommands.Contains(firstWord) && !isWindowFunction)
                 {
                     errors.Add($"Ligne {query.LineNumber} : Commande invalide '{firstWord}'");
                 }

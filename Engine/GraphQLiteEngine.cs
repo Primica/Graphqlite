@@ -94,6 +94,7 @@ public class GraphQLiteEngine : IDisposable
             QueryType.GroupBy => ExecuteGroupByAsync(query),
             QueryType.OrderBy => ExecuteOrderByAsync(query),
             QueryType.Having => ExecuteHavingAsync(query),
+            QueryType.WindowFunction => ExecuteWindowFunctionAsync(query),
             QueryType.ShowSchema => ShowSchemaAsync(),
             _ => throw new NotSupportedException($"Type de requête non supporté : {query.Type}")
         };
@@ -3953,6 +3954,755 @@ public class GraphQLiteEngine : IDisposable
         }
         
         return actual.Equals(expected);
+    }
+
+    /// <summary>
+    /// Exécute une fonction de fenêtre
+    /// </summary>
+    private async Task<QueryResult> ExecuteWindowFunctionAsync(ParsedQuery query)
+    {
+        try
+        {
+            if (!query.HasWindowFunction || !query.WindowFunctionType.HasValue)
+            {
+                return new QueryResult
+                {
+                    Success = false,
+                    Error = "Aucune fonction de fenêtre définie"
+                };
+            }
+
+            // Récupérer tous les nœuds (pour l'instant, on utilise un label par défaut)
+            var nodes = _storage.GetAllNodes();
+            
+            // Filtrer par conditions si présentes
+            if (query.Conditions.Count > 0)
+            {
+                nodes = await FilterNodesByConditionsAsync(nodes, query.Conditions);
+            }
+
+            var results = new List<Dictionary<string, object>>();
+
+            // Appliquer la fonction de fenêtre selon le type
+            switch (query.WindowFunctionType.Value)
+            {
+                case WindowFunctionType.RowNumber:
+                    results = ApplyRowNumberFunction(nodes, query);
+                    break;
+                case WindowFunctionType.Rank:
+                    results = ApplyRankFunction(nodes, query);
+                    break;
+                case WindowFunctionType.DenseRank:
+                    results = ApplyDenseRankFunction(nodes, query);
+                    break;
+                case WindowFunctionType.PercentRank:
+                    results = ApplyPercentRankFunction(nodes, query);
+                    break;
+                case WindowFunctionType.Ntile:
+                    results = ApplyNtileFunction(nodes, query);
+                    break;
+                case WindowFunctionType.Lead:
+                    results = ApplyLeadFunction(nodes, query);
+                    break;
+                case WindowFunctionType.Lag:
+                    results = ApplyLagFunction(nodes, query);
+                    break;
+                case WindowFunctionType.FirstValue:
+                    results = ApplyFirstValueFunction(nodes, query);
+                    break;
+                case WindowFunctionType.LastValue:
+                    results = ApplyLastValueFunction(nodes, query);
+                    break;
+                case WindowFunctionType.NthValue:
+                    results = ApplyNthValueFunction(nodes, query);
+                    break;
+                default:
+                    return new QueryResult
+                    {
+                        Success = false,
+                        Error = $"Fonction de fenêtre non supportée : {query.WindowFunctionType.Value}"
+                    };
+            }
+
+            return new QueryResult
+            {
+                Success = true,
+                Message = $"Fonction de fenêtre {query.WindowFunctionType.Value} appliquée sur {nodes.Count} nœuds",
+                Data = results
+            };
+        }
+        catch (Exception ex)
+        {
+            return new QueryResult
+            {
+                Success = false,
+                Error = $"Erreur lors de l'exécution de la fonction de fenêtre : {ex.Message}"
+            };
+        }
+    }
+
+    /// <summary>
+    /// Applique la fonction ROW_NUMBER()
+    /// </summary>
+    private List<Dictionary<string, object>> ApplyRowNumberFunction(List<Node> nodes, ParsedQuery query)
+    {
+        var results = new List<Dictionary<string, object>>();
+        
+        // Grouper par partition si spécifié
+        if (query.WindowPartitionBy.Count > 0)
+        {
+            var groupedNodes = nodes.GroupBy(node =>
+            {
+                var partitionKey = new Dictionary<string, object>();
+                foreach (var property in query.WindowPartitionBy)
+                {
+                    if (node.Properties.TryGetValue(property, out var value))
+                    {
+                        partitionKey[property] = value;
+                    }
+                }
+                return partitionKey;
+            });
+
+            foreach (var group in groupedNodes)
+            {
+                var sortedNodes = SortNodesByOrderBy(group.ToList(), query.WindowOrderBy);
+                var rowNumber = 1;
+                
+                foreach (var node in sortedNodes)
+                {
+                    var result = new Dictionary<string, object>(node.Properties)
+                    {
+                        ["row_number"] = rowNumber++
+                    };
+                    results.Add(result);
+                }
+            }
+        }
+        else
+        {
+            // Pas de partition, traiter tous les nœuds
+            var sortedNodes = SortNodesByOrderBy(nodes, query.WindowOrderBy);
+            var rowNumber = 1;
+            
+            foreach (var node in sortedNodes)
+            {
+                var result = new Dictionary<string, object>(node.Properties)
+                {
+                    ["row_number"] = rowNumber++
+                };
+                results.Add(result);
+            }
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Applique la fonction RANK()
+    /// </summary>
+    private List<Dictionary<string, object>> ApplyRankFunction(List<Node> nodes, ParsedQuery query)
+    {
+        var results = new List<Dictionary<string, object>>();
+        
+        if (query.WindowPartitionBy.Count > 0)
+        {
+            var groupedNodes = nodes.GroupBy(node =>
+            {
+                var partitionKey = new Dictionary<string, object>();
+                foreach (var property in query.WindowPartitionBy)
+                {
+                    if (node.Properties.TryGetValue(property, out var value))
+                    {
+                        partitionKey[property] = value;
+                    }
+                }
+                return partitionKey;
+            });
+
+            foreach (var group in groupedNodes)
+            {
+                var sortedNodes = SortNodesByOrderBy(group.ToList(), query.WindowOrderBy);
+                var rank = 1;
+                var currentRank = 1;
+                object? previousValue = null;
+                
+                foreach (var node in sortedNodes)
+                {
+                    var orderByValue = GetOrderByValue(node, query.WindowOrderBy.FirstOrDefault());
+                    
+                    if (previousValue != null && !CompareForEquality(orderByValue, previousValue))
+                    {
+                        rank = currentRank;
+                    }
+                    
+                    var result = new Dictionary<string, object>(node.Properties)
+                    {
+                        ["rank"] = rank
+                    };
+                    results.Add(result);
+                    
+                    previousValue = orderByValue;
+                    currentRank++;
+                }
+            }
+        }
+        else
+        {
+            var sortedNodes = SortNodesByOrderBy(nodes, query.WindowOrderBy);
+            var rank = 1;
+            var currentRank = 1;
+            object? previousValue = null;
+            
+            foreach (var node in sortedNodes)
+            {
+                var orderByValue = GetOrderByValue(node, query.WindowOrderBy.FirstOrDefault());
+                
+                if (previousValue != null && !CompareForEquality(orderByValue, previousValue))
+                {
+                    rank = currentRank;
+                }
+                
+                var result = new Dictionary<string, object>(node.Properties)
+                {
+                    ["rank"] = rank
+                };
+                results.Add(result);
+                
+                previousValue = orderByValue;
+                currentRank++;
+            }
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Applique la fonction DENSE_RANK()
+    /// </summary>
+    private List<Dictionary<string, object>> ApplyDenseRankFunction(List<Node> nodes, ParsedQuery query)
+    {
+        var results = new List<Dictionary<string, object>>();
+        
+        if (query.WindowPartitionBy.Count > 0)
+        {
+            var groupedNodes = nodes.GroupBy(node =>
+            {
+                var partitionKey = new Dictionary<string, object>();
+                foreach (var property in query.WindowPartitionBy)
+                {
+                    if (node.Properties.TryGetValue(property, out var value))
+                    {
+                        partitionKey[property] = value;
+                    }
+                }
+                return partitionKey;
+            });
+
+            foreach (var group in groupedNodes)
+            {
+                var sortedNodes = SortNodesByOrderBy(group.ToList(), query.WindowOrderBy);
+                var denseRank = 1;
+                object? previousValue = null;
+                
+                foreach (var node in sortedNodes)
+                {
+                    var orderByValue = GetOrderByValue(node, query.WindowOrderBy.FirstOrDefault());
+                    
+                    if (previousValue != null && !CompareForEquality(orderByValue, previousValue))
+                    {
+                        denseRank++;
+                    }
+                    
+                    var result = new Dictionary<string, object>(node.Properties)
+                    {
+                        ["dense_rank"] = denseRank
+                    };
+                    results.Add(result);
+                    
+                    previousValue = orderByValue;
+                }
+            }
+        }
+        else
+        {
+            var sortedNodes = SortNodesByOrderBy(nodes, query.WindowOrderBy);
+            var denseRank = 1;
+            object? previousValue = null;
+            
+            foreach (var node in sortedNodes)
+            {
+                var orderByValue = GetOrderByValue(node, query.WindowOrderBy.FirstOrDefault());
+                
+                if (previousValue != null && !CompareForEquality(orderByValue, previousValue))
+                {
+                    denseRank++;
+                }
+                
+                var result = new Dictionary<string, object>(node.Properties)
+                {
+                    ["dense_rank"] = denseRank
+                };
+                results.Add(result);
+                
+                previousValue = orderByValue;
+            }
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Applique la fonction PERCENT_RANK()
+    /// </summary>
+    private List<Dictionary<string, object>> ApplyPercentRankFunction(List<Node> nodes, ParsedQuery query)
+    {
+        var results = new List<Dictionary<string, object>>();
+        
+        if (query.WindowPartitionBy.Count > 0)
+        {
+            var groupedNodes = nodes.GroupBy(node =>
+            {
+                var partitionKey = new Dictionary<string, object>();
+                foreach (var property in query.WindowPartitionBy)
+                {
+                    if (node.Properties.TryGetValue(property, out var value))
+                    {
+                        partitionKey[property] = value;
+                    }
+                }
+                return partitionKey;
+            });
+
+            foreach (var group in groupedNodes)
+            {
+                var sortedNodes = SortNodesByOrderBy(group.ToList(), query.WindowOrderBy);
+                var totalCount = sortedNodes.Count;
+                
+                for (int i = 0; i < sortedNodes.Count; i++)
+                {
+                    var node = sortedNodes[i];
+                    var percentRank = totalCount > 1 ? (double)i / (totalCount - 1) : 0.0;
+                    
+                    var result = new Dictionary<string, object>(node.Properties)
+                    {
+                        ["percent_rank"] = percentRank
+                    };
+                    results.Add(result);
+                }
+            }
+        }
+        else
+        {
+            var sortedNodes = SortNodesByOrderBy(nodes, query.WindowOrderBy);
+            var totalCount = sortedNodes.Count;
+            
+            for (int i = 0; i < sortedNodes.Count; i++)
+            {
+                var node = sortedNodes[i];
+                var percentRank = totalCount > 1 ? (double)i / (totalCount - 1) : 0.0;
+                
+                var result = new Dictionary<string, object>(node.Properties)
+                {
+                    ["percent_rank"] = percentRank
+                };
+                results.Add(result);
+            }
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Applique la fonction NTILE()
+    /// </summary>
+    private List<Dictionary<string, object>> ApplyNtileFunction(List<Node> nodes, ParsedQuery query)
+    {
+        // Pour NTILE, on a besoin d'un paramètre (nombre de groupes)
+        // Pour l'instant, on utilise 4 par défaut
+        var numTiles = 4;
+        
+        var results = new List<Dictionary<string, object>>();
+        
+        if (query.WindowPartitionBy.Count > 0)
+        {
+            var groupedNodes = nodes.GroupBy(node =>
+            {
+                var partitionKey = new Dictionary<string, object>();
+                foreach (var property in query.WindowPartitionBy)
+                {
+                    if (node.Properties.TryGetValue(property, out var value))
+                    {
+                        partitionKey[property] = value;
+                    }
+                }
+                return partitionKey;
+            });
+
+            foreach (var group in groupedNodes)
+            {
+                var sortedNodes = SortNodesByOrderBy(group.ToList(), query.WindowOrderBy);
+                var totalCount = sortedNodes.Count;
+                
+                for (int i = 0; i < sortedNodes.Count; i++)
+                {
+                    var node = sortedNodes[i];
+                    var ntile = Math.Min(numTiles, (int)((i * numTiles) / totalCount) + 1);
+                    
+                    var result = new Dictionary<string, object>(node.Properties)
+                    {
+                        ["ntile"] = ntile
+                    };
+                    results.Add(result);
+                }
+            }
+        }
+        else
+        {
+            var sortedNodes = SortNodesByOrderBy(nodes, query.WindowOrderBy);
+            var totalCount = sortedNodes.Count;
+            
+            for (int i = 0; i < sortedNodes.Count; i++)
+            {
+                var node = sortedNodes[i];
+                var ntile = Math.Min(numTiles, (int)((i * numTiles) / totalCount) + 1);
+                
+                var result = new Dictionary<string, object>(node.Properties)
+                {
+                    ["ntile"] = ntile
+                };
+                results.Add(result);
+            }
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Applique la fonction LEAD()
+    /// </summary>
+    private List<Dictionary<string, object>> ApplyLeadFunction(List<Node> nodes, ParsedQuery query)
+    {
+        var results = new List<Dictionary<string, object>>();
+        
+        if (query.WindowPartitionBy.Count > 0)
+        {
+            var groupedNodes = nodes.GroupBy(node =>
+            {
+                var partitionKey = new Dictionary<string, object>();
+                foreach (var property in query.WindowPartitionBy)
+                {
+                    if (node.Properties.TryGetValue(property, out var value))
+                    {
+                        partitionKey[property] = value;
+                    }
+                }
+                return partitionKey;
+            });
+
+            foreach (var group in groupedNodes)
+            {
+                var sortedNodes = SortNodesByOrderBy(group.ToList(), query.WindowOrderBy);
+                
+                for (int i = 0; i < sortedNodes.Count; i++)
+                {
+                    var node = sortedNodes[i];
+                    var leadValue = i + 1 < sortedNodes.Count ? 
+                        GetOrderByValue(sortedNodes[i + 1], query.WindowOrderBy.FirstOrDefault()) : null;
+                    
+                    var result = new Dictionary<string, object>(node.Properties)
+                    {
+                        ["lead"] = leadValue
+                    };
+                    results.Add(result);
+                }
+            }
+        }
+        else
+        {
+            var sortedNodes = SortNodesByOrderBy(nodes, query.WindowOrderBy);
+            
+            for (int i = 0; i < sortedNodes.Count; i++)
+            {
+                var node = sortedNodes[i];
+                var leadValue = i + 1 < sortedNodes.Count ? 
+                    GetOrderByValue(sortedNodes[i + 1], query.WindowOrderBy.FirstOrDefault()) : null;
+                
+                var result = new Dictionary<string, object>(node.Properties)
+                {
+                    ["lead"] = leadValue
+                };
+                results.Add(result);
+            }
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Applique la fonction LAG()
+    /// </summary>
+    private List<Dictionary<string, object>> ApplyLagFunction(List<Node> nodes, ParsedQuery query)
+    {
+        var results = new List<Dictionary<string, object>>();
+        
+        if (query.WindowPartitionBy.Count > 0)
+        {
+            var groupedNodes = nodes.GroupBy(node =>
+            {
+                var partitionKey = new Dictionary<string, object>();
+                foreach (var property in query.WindowPartitionBy)
+                {
+                    if (node.Properties.TryGetValue(property, out var value))
+                    {
+                        partitionKey[property] = value;
+                    }
+                }
+                return partitionKey;
+            });
+
+            foreach (var group in groupedNodes)
+            {
+                var sortedNodes = SortNodesByOrderBy(group.ToList(), query.WindowOrderBy);
+                
+                for (int i = 0; i < sortedNodes.Count; i++)
+                {
+                    var node = sortedNodes[i];
+                    var lagValue = i > 0 ? 
+                        GetOrderByValue(sortedNodes[i - 1], query.WindowOrderBy.FirstOrDefault()) : null;
+                    
+                    var result = new Dictionary<string, object>(node.Properties)
+                    {
+                        ["lag"] = lagValue
+                    };
+                    results.Add(result);
+                }
+            }
+        }
+        else
+        {
+            var sortedNodes = SortNodesByOrderBy(nodes, query.WindowOrderBy);
+            
+            for (int i = 0; i < sortedNodes.Count; i++)
+            {
+                var node = sortedNodes[i];
+                var lagValue = i > 0 ? 
+                    GetOrderByValue(sortedNodes[i - 1], query.WindowOrderBy.FirstOrDefault()) : null;
+                
+                var result = new Dictionary<string, object>(node.Properties)
+                {
+                    ["lag"] = lagValue
+                };
+                results.Add(result);
+            }
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Applique la fonction FIRST_VALUE()
+    /// </summary>
+    private List<Dictionary<string, object>> ApplyFirstValueFunction(List<Node> nodes, ParsedQuery query)
+    {
+        var results = new List<Dictionary<string, object>>();
+        
+        if (query.WindowPartitionBy.Count > 0)
+        {
+            var groupedNodes = nodes.GroupBy(node =>
+            {
+                var partitionKey = new Dictionary<string, object>();
+                foreach (var property in query.WindowPartitionBy)
+                {
+                    if (node.Properties.TryGetValue(property, out var value))
+                    {
+                        partitionKey[property] = value;
+                    }
+                }
+                return partitionKey;
+            });
+
+            foreach (var group in groupedNodes)
+            {
+                var sortedNodes = SortNodesByOrderBy(group.ToList(), query.WindowOrderBy);
+                var firstValue = sortedNodes.Count > 0 ? 
+                    GetOrderByValue(sortedNodes[0], query.WindowOrderBy.FirstOrDefault()) : null;
+                
+                foreach (var node in sortedNodes)
+                {
+                    var result = new Dictionary<string, object>(node.Properties)
+                    {
+                        ["first_value"] = firstValue
+                    };
+                    results.Add(result);
+                }
+            }
+        }
+        else
+        {
+            var sortedNodes = SortNodesByOrderBy(nodes, query.WindowOrderBy);
+            var firstValue = sortedNodes.Count > 0 ? 
+                GetOrderByValue(sortedNodes[0], query.WindowOrderBy.FirstOrDefault()) : null;
+            
+            foreach (var node in sortedNodes)
+            {
+                var result = new Dictionary<string, object>(node.Properties)
+                {
+                    ["first_value"] = firstValue
+                };
+                results.Add(result);
+            }
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Applique la fonction LAST_VALUE()
+    /// </summary>
+    private List<Dictionary<string, object>> ApplyLastValueFunction(List<Node> nodes, ParsedQuery query)
+    {
+        var results = new List<Dictionary<string, object>>();
+        
+        if (query.WindowPartitionBy.Count > 0)
+        {
+            var groupedNodes = nodes.GroupBy(node =>
+            {
+                var partitionKey = new Dictionary<string, object>();
+                foreach (var property in query.WindowPartitionBy)
+                {
+                    if (node.Properties.TryGetValue(property, out var value))
+                    {
+                        partitionKey[property] = value;
+                    }
+                }
+                return partitionKey;
+            });
+
+            foreach (var group in groupedNodes)
+            {
+                var sortedNodes = SortNodesByOrderBy(group.ToList(), query.WindowOrderBy);
+                var lastValue = sortedNodes.Count > 0 ? 
+                    GetOrderByValue(sortedNodes[sortedNodes.Count - 1], query.WindowOrderBy.FirstOrDefault()) : null;
+                
+                foreach (var node in sortedNodes)
+                {
+                    var result = new Dictionary<string, object>(node.Properties)
+                    {
+                        ["last_value"] = lastValue
+                    };
+                    results.Add(result);
+                }
+            }
+        }
+        else
+        {
+            var sortedNodes = SortNodesByOrderBy(nodes, query.WindowOrderBy);
+            var lastValue = sortedNodes.Count > 0 ? 
+                GetOrderByValue(sortedNodes[sortedNodes.Count - 1], query.WindowOrderBy.FirstOrDefault()) : null;
+            
+            foreach (var node in sortedNodes)
+            {
+                var result = new Dictionary<string, object>(node.Properties)
+                {
+                    ["last_value"] = lastValue
+                };
+                results.Add(result);
+            }
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Applique la fonction NTH_VALUE()
+    /// </summary>
+    private List<Dictionary<string, object>> ApplyNthValueFunction(List<Node> nodes, ParsedQuery query)
+    {
+        // Pour NTH_VALUE, on a besoin d'un paramètre (position)
+        // Pour l'instant, on utilise 2 par défaut
+        var nthPosition = 2;
+        
+        var results = new List<Dictionary<string, object>>();
+        
+        if (query.WindowPartitionBy.Count > 0)
+        {
+            var groupedNodes = nodes.GroupBy(node =>
+            {
+                var partitionKey = new Dictionary<string, object>();
+                foreach (var property in query.WindowPartitionBy)
+                {
+                    if (node.Properties.TryGetValue(property, out var value))
+                    {
+                        partitionKey[property] = value;
+                    }
+                }
+                return partitionKey;
+            });
+
+            foreach (var group in groupedNodes)
+            {
+                var sortedNodes = SortNodesByOrderBy(group.ToList(), query.WindowOrderBy);
+                var nthValue = sortedNodes.Count >= nthPosition ? 
+                    GetOrderByValue(sortedNodes[nthPosition - 1], query.WindowOrderBy.FirstOrDefault()) : null;
+                
+                foreach (var node in sortedNodes)
+                {
+                    var result = new Dictionary<string, object>(node.Properties)
+                    {
+                        ["nth_value"] = nthValue
+                    };
+                    results.Add(result);
+                }
+            }
+        }
+        else
+        {
+            var sortedNodes = SortNodesByOrderBy(nodes, query.WindowOrderBy);
+            var nthValue = sortedNodes.Count >= nthPosition ? 
+                GetOrderByValue(sortedNodes[nthPosition - 1], query.WindowOrderBy.FirstOrDefault()) : null;
+            
+            foreach (var node in sortedNodes)
+            {
+                var result = new Dictionary<string, object>(node.Properties)
+                {
+                    ["nth_value"] = nthValue
+                };
+                results.Add(result);
+            }
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Trie les nœuds selon les clauses ORDER BY
+    /// </summary>
+    private List<Node> SortNodesByOrderBy(List<Node> nodes, List<OrderByClause> orderByClauses)
+    {
+        var sortedNodes = nodes.AsEnumerable();
+        
+        foreach (var clause in orderByClauses)
+        {
+            sortedNodes = clause.Direction == OrderDirection.Ascending
+                ? sortedNodes.OrderBy(n => GetOrderByValue(n, clause))
+                : sortedNodes.OrderByDescending(n => GetOrderByValue(n, clause));
+        }
+        
+        return sortedNodes.ToList();
+    }
+
+    /// <summary>
+    /// Obtient la valeur pour le tri selon une clause ORDER BY
+    /// </summary>
+    private object? GetOrderByValue(Node node, OrderByClause? clause)
+    {
+        if (clause == null || string.IsNullOrEmpty(clause.Property))
+        {
+            return null;
+        }
+        
+        return node.Properties.GetValueOrDefault(clause.Property);
     }
 }
 /// <summary>

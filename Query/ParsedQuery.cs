@@ -74,6 +74,13 @@ public class ParsedQuery
     public bool HasOrderBy => OrderByClauses.Count > 0;
     public bool HasHaving => HavingConditions.Count > 0;
     
+    // Propriétés pour les fonctions de fenêtre
+    public WindowFunctionType? WindowFunctionType { get; set; }
+    public List<string> WindowPartitionBy { get; set; } = new();
+    public List<OrderByClause> WindowOrderBy { get; set; } = new();
+    public string? WindowFunctionProperty { get; set; }
+    public bool HasWindowFunction => WindowFunctionType.HasValue;
+    
     // Propriétés pour la validation et les erreurs
     public List<string> ValidationErrors { get; set; } = new();
     public bool IsValid => !ValidationErrors.Any();
@@ -204,7 +211,8 @@ public enum QueryType
     VirtualJoin,
     GroupBy,
     OrderBy,
-    Having
+    Having,
+    WindowFunction
 }
 
 /// <summary>
@@ -268,4 +276,21 @@ public enum OrderDirection
 {
     Ascending,
     Descending
+}
+
+/// <summary>
+/// Types de fonctions de fenêtre
+/// </summary>
+public enum WindowFunctionType
+{
+    RowNumber,
+    Rank,
+    DenseRank,
+    PercentRank,
+    Ntile,
+    Lead,
+    Lag,
+    FirstValue,
+    LastValue,
+    NthValue
 }

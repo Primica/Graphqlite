@@ -22,6 +22,8 @@ Une base de données orientée graphe simple avec un DSL en langage naturel, con
 - **Parsing robuste** : Gestion intelligente des propriétés multiples et valeurs complexes
 - **Sous-requêtes complexes** : EXISTS, NOT EXISTS, IN, NOT IN avec agrégations
 - **Jointures virtuelles** : Relations entre nœuds via chemins complexes sans créer d'arêtes physiques
+- **Groupement et tri** : GROUP BY, ORDER BY, HAVING avec agrégations automatiques et conditions complexes
+- **Fonctions de fenêtre** : ROW_NUMBER, RANK, DENSE_RANK, PERCENT_RANK, NTILE, LEAD, LAG, FIRST_VALUE, LAST_VALUE, NTH_VALUE
 
 ## 📁 Structure du projet
 
@@ -276,6 +278,62 @@ find persons where department in (select name from projects where budget > (sele
 find persons where department exists in (select name from projects where budget > (select avg budget from projects))
 ```
 
+### Groupement et tri
+```gqls
+# GROUP BY - Groupement de nœuds
+group persons by city
+group persons by city, role
+group persons by city where role = developer
+group persons by city having count > 2
+
+# ORDER BY - Tri de nœuds
+order persons by age
+order persons by age desc
+order persons by city, age
+order persons by salary desc where role = developer
+sort persons by age
+
+# HAVING - Conditions sur les groupes
+group persons by role having avg_salary > 60000
+group persons by city having min_age > 25
+```
+
+### Fonctions de fenêtre
+```gqls
+# ROW_NUMBER - Numérotation des lignes
+row_number() over (order by salary desc)
+row_number() over (partition by city order by salary desc)
+row_number() over (partition by city, role order by age)
+
+# RANK - Classement avec gaps
+rank() over (order by salary desc)
+rank() over (partition by role order by salary desc)
+rank() over (partition by city, role order by age)
+
+# DENSE_RANK - Classement sans gaps
+dense_rank() over (order by salary desc)
+dense_rank() over (partition by role order by salary desc)
+
+# PERCENT_RANK - Rang en pourcentage
+percent_rank() over (order by salary desc)
+percent_rank() over (partition by role order by salary desc)
+
+# NTILE - Division en groupes
+ntile() over (order by salary desc)
+ntile() over (partition by role order by salary desc)
+
+# LEAD/LAG - Valeurs suivantes/précédentes
+lead() over (order by salary desc)
+lag() over (order by salary desc)
+
+# FIRST_VALUE/LAST_VALUE - Première/dernière valeur
+first_value() over (order by salary desc)
+last_value() over (order by salary desc)
+
+# NTH_VALUE - Nième valeur
+nth_value() over (order by salary desc)
+```
+
 ### Visualisation du schéma
 ```gqls
 show schema
@@ -510,8 +568,8 @@ dotnet run -- --db production --script migration
 ### Fonctionnalités avancées
 - **Sous-requêtes complexes** : `EXISTS`, `NOT EXISTS`, `IN`, `NOT IN` avec agrégations ✅
 - **Jointures virtuelles** : Relations entre nœuds via des chemins complexes ✅
-- **Groupement et tri** : `GROUP BY`, `ORDER BY`, `HAVING`
-- **Fonctions de fenêtre** : `ROW_NUMBER()`, `RANK()`, `DENSE_RANK()`
+- **Groupement et tri** : `GROUP BY`, `ORDER BY`, `HAVING` ✅
+- **Fonctions de fenêtre** : `ROW_NUMBER()`, `RANK()`, `DENSE_RANK()` ✅
 
 ### Optimisations de performance
 - **Indexation** : Index sur les propriétés fréquemment utilisées
@@ -549,4 +607,4 @@ Projet open source conçu pour simplifier l'usage des bases de données orienté
 
 **GraphQLite** - Parce que les graphes ne devraient pas être compliqués.
 
-**Version actuelle** : v1.4 - Système 100% fonctionnel avec jointures virtuelles, sous-requêtes complexes et toutes les fonctionnalités avancées opérationnelles
+**Version actuelle** : v1.6 - Système 100% fonctionnel avec jointures virtuelles, sous-requêtes complexes, groupement et tri, fonctions de fenêtre, et toutes les fonctionnalités avancées opérationnelles
