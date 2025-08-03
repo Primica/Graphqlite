@@ -90,6 +90,7 @@ public class GraphQLiteEngine : IDisposable
             QueryType.Aggregate => ExecuteAggregateAsync(query),
             QueryType.DefineVariable => DefineVariableAsync(query),
             QueryType.BatchOperation => ExecuteBatchOperationAsync(query),
+            QueryType.VirtualJoin => ExecuteVirtualJoinAsync(query),
             QueryType.ShowSchema => ShowSchemaAsync(),
             _ => throw new NotSupportedException($"Type de requête non supporté : {query.Type}")
         };
@@ -3441,6 +3442,247 @@ public class GraphQLiteEngine : IDisposable
             "lte" => CompareValues(nodeValue, aggregateValue) <= 0,
             _ => false
         };
+    }
+
+    /// <summary>
+    /// Exécute une jointure virtuelle entre deux types de nœuds
+    /// </summary>
+    private async Task<QueryResult> ExecuteVirtualJoinAsync(ParsedQuery query)
+    {
+        try
+        {
+            Console.WriteLine($"DEBUG: ExecuteVirtualJoinAsync - Query type: {query.Type}");
+            
+            if (!query.HasVirtualJoins)
+            {
+                return new QueryResult
+                {
+                    Success = false,
+                    Error = "Aucune jointure virtuelle définie dans la requête"
+                };
+            }
+
+            var virtualJoin = query.VirtualJoins.First();
+            Console.WriteLine($"DEBUG: ExecuteVirtualJoinAsync - Virtual join: {virtualJoin.SourceNodeLabel} -> {virtualJoin.TargetNodeLabel}");
+
+            // Récupérer les nœuds source
+            var sourceNodes = _storage.GetAllNodes()
+                .Where(n => n.Label.Equals(virtualJoin.SourceNodeLabel, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            Console.WriteLine($"DEBUG: ExecuteVirtualJoinAsync - Found {sourceNodes.Count} source nodes");
+
+            var joinedResults = new List<Dictionary<string, object>>();
+
+            foreach (var sourceNode in sourceNodes)
+            {
+                Console.WriteLine($"DEBUG: ExecuteVirtualJoinAsync - Processing source node: {sourceNode.GetProperty<string>("name")}");
+
+                // Trouver les nœuds cibles connectés selon le type de jointure
+                List<Node> targetNodes = new();
+
+                if (!string.IsNullOrEmpty(virtualJoin.EdgeType))
+                {
+                    // Jointure via un type d'arête spécifique
+                    targetNodes = FindConnectedNodesViaEdgeType(sourceNode, virtualJoin.TargetNodeLabel, virtualJoin.EdgeType, virtualJoin.MaxSteps ?? 1);
+                }
+                else if (!string.IsNullOrEmpty(virtualJoin.JoinProperty))
+                {
+                    // Jointure sur une propriété commune
+                    targetNodes = FindConnectedNodesViaProperty(sourceNode, virtualJoin.TargetNodeLabel, virtualJoin.JoinProperty, virtualJoin.JoinOperator ?? "=");
+                }
+                else if (virtualJoin.MaxSteps.HasValue)
+                {
+                    // Jointure dans un rayon de pas
+                    targetNodes = FindNodesWithinStepsAdvanced(sourceNode.Id, virtualJoin.TargetNodeLabel, virtualJoin.MaxSteps.Value, null, null);
+                }
+                else
+                {
+                    // Jointure simple via chemins
+                    targetNodes = FindConnectedNodesSimple(sourceNode, virtualJoin.TargetNodeLabel);
+                }
+
+                Console.WriteLine($"DEBUG: ExecuteVirtualJoinAsync - Found {targetNodes.Count} target nodes for source {sourceNode.GetProperty<string>("name")}");
+
+                // Appliquer les conditions de jointure si présentes
+                if (virtualJoin.JoinConditions.Any())
+                {
+                    targetNodes = await FilterNodesByConditionsAsync(targetNodes, virtualJoin.JoinConditions);
+                    Console.WriteLine($"DEBUG: ExecuteVirtualJoinAsync - After filtering: {targetNodes.Count} target nodes");
+                }
+
+                // Créer les résultats de jointure
+                foreach (var targetNode in targetNodes)
+                {
+                    var joinResult = new Dictionary<string, object>
+                    {
+                        ["source_node"] = sourceNode,
+                        ["target_node"] = targetNode,
+                        ["source_label"] = virtualJoin.SourceNodeLabel,
+                        ["target_label"] = virtualJoin.TargetNodeLabel,
+                        ["join_type"] = query.JoinType ?? "inner"
+                    };
+
+                    // Ajouter les propriétés des nœuds
+                    foreach (var prop in sourceNode.Properties)
+                    {
+                        joinResult[$"source_{prop.Key}"] = prop.Value;
+                    }
+
+                    foreach (var prop in targetNode.Properties)
+                    {
+                        joinResult[$"target_{prop.Key}"] = prop.Value;
+                    }
+
+                    joinedResults.Add(joinResult);
+                }
+            }
+
+            Console.WriteLine($"DEBUG: ExecuteVirtualJoinAsync - Total joined results: {joinedResults.Count}");
+
+            return new QueryResult
+            {
+                Success = true,
+                Message = $"Jointure virtuelle réussie : {joinedResults.Count} résultats",
+                Data = joinedResults
+            };
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"DEBUG: ExecuteVirtualJoinAsync - Error: {ex.Message}");
+            return new QueryResult
+            {
+                Success = false,
+                Error = $"Erreur lors de l'exécution de la jointure virtuelle : {ex.Message}"
+            };
+        }
+    }
+
+    /// <summary>
+    /// Trouve les nœuds connectés via un type d'arête spécifique
+    /// </summary>
+    private List<Node> FindConnectedNodesViaEdgeType(Node sourceNode, string targetLabel, string edgeType, int maxSteps)
+    {
+        var targetNodes = new List<Node>();
+        var visited = new HashSet<Guid>();
+        var queue = new Queue<(Node node, int steps)>();
+
+        queue.Enqueue((sourceNode, 0));
+        visited.Add(sourceNode.Id);
+
+        while (queue.Count > 0)
+        {
+            var (currentNode, steps) = queue.Dequeue();
+
+            if (steps >= maxSteps) continue;
+
+            // Trouver toutes les arêtes sortantes du nœud actuel
+            var edges = _storage.GetAllEdges()
+                .Where(e => e.FromNodeId == currentNode.Id && e.RelationType.Equals(edgeType, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            foreach (var edge in edges)
+            {
+                var targetNode = _storage.GetAllNodes().FirstOrDefault(n => n.Id == edge.ToNodeId);
+                if (targetNode != null && !visited.Contains(targetNode.Id))
+                {
+                    visited.Add(targetNode.Id);
+
+                    if (targetNode.Label.Equals(targetLabel, StringComparison.OrdinalIgnoreCase))
+                    {
+                        targetNodes.Add(targetNode);
+                    }
+
+                    if (steps + 1 < maxSteps)
+                    {
+                        queue.Enqueue((targetNode, steps + 1));
+                    }
+                }
+            }
+        }
+
+        return targetNodes;
+    }
+
+    /// <summary>
+    /// Trouve les nœuds connectés via une propriété commune
+    /// </summary>
+    private List<Node> FindConnectedNodesViaProperty(Node sourceNode, string targetLabel, string joinProperty, string joinOperator)
+    {
+        var targetNodes = new List<Node>();
+        var sourceValue = sourceNode.GetProperty<object>(joinProperty);
+
+        if (sourceValue == null) return targetNodes;
+
+        var allTargetNodes = _storage.GetAllNodes()
+            .Where(n => n.Label.Equals(targetLabel, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        foreach (var targetNode in allTargetNodes)
+        {
+            var targetValue = targetNode.GetProperty<object>(joinProperty);
+            if (targetValue != null)
+            {
+                bool shouldInclude = joinOperator switch
+                {
+                    "=" => CompareForEquality(sourceValue, targetValue),
+                    ">" => CompareValues(sourceValue, targetValue) > 0,
+                    "<" => CompareValues(sourceValue, targetValue) < 0,
+                    ">=" => CompareValues(sourceValue, targetValue) >= 0,
+                    "<=" => CompareValues(sourceValue, targetValue) <= 0,
+                    "!=" => !CompareForEquality(sourceValue, targetValue),
+                    _ => CompareForEquality(sourceValue, targetValue)
+                };
+
+                if (shouldInclude)
+                {
+                    targetNodes.Add(targetNode);
+                }
+            }
+        }
+
+        return targetNodes;
+    }
+
+    /// <summary>
+    /// Trouve les nœuds connectés de manière simple
+    /// </summary>
+    private List<Node> FindConnectedNodesSimple(Node sourceNode, string targetLabel)
+    {
+        var targetNodes = new List<Node>();
+        var visited = new HashSet<Guid>();
+        var queue = new Queue<Node>();
+
+        queue.Enqueue(sourceNode);
+        visited.Add(sourceNode.Id);
+
+        while (queue.Count > 0)
+        {
+            var currentNode = queue.Dequeue();
+
+            // Trouver toutes les arêtes sortantes du nœud actuel
+            var edges = _storage.GetAllEdges()
+                .Where(e => e.FromNodeId == currentNode.Id)
+                .ToList();
+
+            foreach (var edge in edges)
+            {
+                var targetNode = _storage.GetAllNodes().FirstOrDefault(n => n.Id == edge.ToNodeId);
+                if (targetNode != null && !visited.Contains(targetNode.Id))
+                {
+                    visited.Add(targetNode.Id);
+
+                    if (targetNode.Label.Equals(targetLabel, StringComparison.OrdinalIgnoreCase))
+                    {
+                        targetNodes.Add(targetNode);
+                    }
+
+                    queue.Enqueue(targetNode);
+                }
+            }
+        }
+
+        return targetNodes;
     }
 }
 /// <summary>

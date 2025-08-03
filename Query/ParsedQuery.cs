@@ -1,6 +1,23 @@
 namespace GraphQLite.Query;
 
 /// <summary>
+/// Représente une jointure virtuelle entre deux nœuds
+/// </summary>
+public class VirtualJoin
+{
+    public string SourceNodeLabel { get; set; } = string.Empty;
+    public string TargetNodeLabel { get; set; } = string.Empty;
+    public string? EdgeType { get; set; }
+    public string? JoinProperty { get; set; }
+    public string? JoinOperator { get; set; } // "=", ">", "<", ">=", "<=", "!="
+    public Dictionary<string, object> JoinConditions { get; set; } = new();
+    public int? MaxSteps { get; set; }
+    public bool IsBidirectional { get; set; } = false;
+    public string? ViaNodeLabel { get; set; }
+    public string? AvoidEdgeType { get; set; }
+}
+
+/// <summary>
 /// Représente une requête parsée dans le DSL GraphQLite
 /// </summary>
 public class ParsedQuery
@@ -42,6 +59,12 @@ public class ParsedQuery
     public bool HasSubQueries => SubQueries.Count > 0;
     public ParsedQuery? ParentQuery { get; set; }
     public int SubQueryDepth { get; set; } = 0;
+    
+    // Propriétés pour les jointures virtuelles
+    public List<VirtualJoin> VirtualJoins { get; set; } = new();
+    public bool HasVirtualJoins => VirtualJoins.Count > 0;
+    public string? JoinType { get; set; } // "inner", "left", "right", "full"
+    public string? JoinCondition { get; set; }
     
     // Propriétés pour la validation et les erreurs
     public List<string> ValidationErrors { get; set; } = new();
@@ -169,7 +192,8 @@ public enum QueryType
     BatchOperation,
     SubQuery,
     BulkInsert,
-    Transaction
+    Transaction,
+    VirtualJoin
 }
 
 /// <summary>

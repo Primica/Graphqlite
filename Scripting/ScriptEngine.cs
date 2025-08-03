@@ -347,7 +347,7 @@ public class ScriptEngine
                     "avg", "sum", "min", "max", "aggregate", "batch", "bulk", "import", 
                     "select", "subquery", "let", "set", "var", "define", "add", "get", 
                     "search", "link", "relate", "modify", "remove", "path", "describe", 
-                    "schema" 
+                    "schema", "join", "virtual", "merge", "combine" 
                 };
                 
                 if (!validCommands.Contains(firstWord))

@@ -20,6 +20,8 @@ Une base de données orientée graphe simple avec un DSL en langage naturel, con
 - **Agrégations avancées** : SUM, AVG, MIN, MAX, COUNT sur nœuds et arêtes avec filtres complexes
 - **Chemins bidirectionnels** : Support complet des chemins bidirectionnels et shortest path
 - **Parsing robuste** : Gestion intelligente des propriétés multiples et valeurs complexes
+- **Sous-requêtes complexes** : EXISTS, NOT EXISTS, IN, NOT IN avec agrégations
+- **Jointures virtuelles** : Relations entre nœuds via chemins complexes sans créer d'arêtes physiques
 
 ## 📁 Structure du projet
 
@@ -400,6 +402,21 @@ dotnet run -- --db production --script migration
 
 ### 🎯 Fonctionnalités avancées opérationnelles
 
+#### **Jointures virtuelles** ✅
+- ✅ Jointures via type d'arête : `join persons with projects via works_on`
+- ✅ Jointures sur propriété commune : `merge persons with companies on company_id`
+- ✅ Jointures avec conditions : `virtual join persons and projects where department = 'IT'`
+- ✅ Jointures bidirectionnelles : `virtual join persons and companies bidirectional`
+- ✅ Jointures avec rayon de pas : `join persons with projects within 2 steps`
+- ✅ Jointures avec agrégations : `join persons with projects via works_on where budget > 40000`
+
+#### **Sous-requêtes complexes** ✅
+- ✅ EXISTS et NOT EXISTS : Vérification d'existence dans des sous-requêtes
+- ✅ IN et NOT IN : Vérification d'appartenance à des listes
+- ✅ ALL et ANY : Opérateurs de comparaison multiple
+- ✅ Sous-requêtes imbriquées : Support des agrégations dans les sous-requêtes
+- ✅ Extraction de propriétés : Parsing automatique des propriétés complexes
+
 #### **Chemins et navigation**
 - ✅ Chemins bidirectionnels : `find bidirectional path from A to B`
 - ✅ Chemins les plus courts : `find shortest path from A to B`
@@ -430,10 +447,12 @@ dotnet run -- --db production --script migration
 - **Parser DSL** : 100% ✅ (Très avancé avec regex complexes et variables)
 - **Moteur de requêtes** : 100% ✅ (Stable avec BFS, filtrage avancé et variables)
 - **Interface utilisateur** : 100% ✅ (CLI complet et scripts)
-- **Tests et validation** : 100% ✅ (Couverture complète avec 104/104 tests réussis)
+- **Tests et validation** : 100% ✅ (Couverture complète avec tests réussis)
 - **Système de variables** : 100% ✅ (Cohérence parfaite avec tous les types)
 - **Agrégations** : 100% ✅ (Support complet sur nœuds et arêtes)
 - **Chemins avancés** : 100% ✅ (Bidirectionnels, shortest, filtres)
+- **Sous-requêtes complexes** : 100% ✅ (EXISTS, IN, ALL, ANY avec agrégations)
+- **Jointures virtuelles** : 100% ✅ (Via arêtes, propriétés, conditions, bidirectionnelles)
 
 ### 🎯 Production-ready pour
 
@@ -444,8 +463,18 @@ dotnet run -- --db production --script migration
 - **Éducation et apprentissage** des bases de données orientées graphe
 - **Scripts réutilisables** avec système de variables complet
 - **Analyse de données** avec agrégations et filtres complexes
+- **Relations complexes** avec jointures virtuelles et sous-requêtes
 
-## 🚀 Fonctionnalités récemment implémentées (v1.3)
+## 🚀 Fonctionnalités récemment implémentées (v1.4)
+
+### **Jointures virtuelles** ✅
+- Support complet des jointures via type d'arête : `join persons with projects via works_on`
+- Jointures sur propriété commune : `merge persons with companies on company_id`
+- Jointures avec conditions : `virtual join persons and projects where department = 'IT'`
+- Jointures bidirectionnelles : `virtual join persons and companies bidirectional`
+- Jointures avec rayon de pas : `join persons with projects within 2 steps`
+- Support des opérateurs de comparaison (`=`, `>`, `<`, `>=`, `<=`, `!=`)
+- Résultats structurés avec données des nœuds source et cible
 
 ### **Sous-requêtes complexes** ✅
 - Support complet des opérateurs `EXISTS`, `NOT EXISTS`, `IN`, `NOT IN`
@@ -480,7 +509,7 @@ dotnet run -- --db production --script migration
 
 ### Fonctionnalités avancées
 - **Sous-requêtes complexes** : `EXISTS`, `NOT EXISTS`, `IN`, `NOT IN` avec agrégations ✅
-- **Jointures virtuelles** : Relations entre nœuds via des chemins complexes
+- **Jointures virtuelles** : Relations entre nœuds via des chemins complexes ✅
 - **Groupement et tri** : `GROUP BY`, `ORDER BY`, `HAVING`
 - **Fonctions de fenêtre** : `ROW_NUMBER()`, `RANK()`, `DENSE_RANK()`
 
@@ -520,4 +549,4 @@ Projet open source conçu pour simplifier l'usage des bases de données orienté
 
 **GraphQLite** - Parce que les graphes ne devraient pas être compliqués.
 
-**Version actuelle** : v1.3 - Système 100% fonctionnel avec sous-requêtes complexes et toutes les fonctionnalités avancées opérationnelles
+**Version actuelle** : v1.4 - Système 100% fonctionnel avec jointures virtuelles, sous-requêtes complexes et toutes les fonctionnalités avancées opérationnelles

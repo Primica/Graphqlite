@@ -54,7 +54,11 @@ public class NaturalLanguageParser
         { "route", QueryType.FindPath },
         { "traverse", QueryType.FindWithinSteps },
         { "neighbors", QueryType.FindWithinSteps },
-        { "adjacent", QueryType.FindWithinSteps }
+        { "adjacent", QueryType.FindWithinSteps },
+        { "join", QueryType.VirtualJoin },
+        { "virtual", QueryType.VirtualJoin },
+        { "merge", QueryType.VirtualJoin },
+        { "combine", QueryType.VirtualJoin }
     };
 
     /// <summary>
@@ -122,6 +126,9 @@ public class NaturalLanguageParser
                 break;
             case QueryType.SubQuery:
                 ParseSubQuery(queryForParsing, parsedQuery);
+                break;
+            case QueryType.VirtualJoin:
+                ParseVirtualJoin(queryForParsing, parsedQuery);
                 break;
             case QueryType.ShowSchema:
                 // Pour les commandes de schéma, aucune autre information n'est nécessaire
@@ -282,7 +289,26 @@ public class NaturalLanguageParser
                 if (patternIndex == 0) // Pattern 1 : avec "with"
                 {
                     var propertiesText = match.Groups[2].Value.Trim();
-                    ParseDynamicProperties(propertiesText, parsedQuery.Properties);
+                    
+                    // Gérer le format "properties {...}"
+                    if (propertiesText.StartsWith("properties", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Extraire le contenu entre accolades
+                        var braceMatch = Regex.Match(propertiesText, @"properties\s*\{([^}]+)\}", RegexOptions.IgnoreCase);
+                        if (braceMatch.Success)
+                        {
+                            var propertiesContent = braceMatch.Groups[1].Value.Trim();
+                            ParsePropertiesFromBraceContent(propertiesContent, parsedQuery.Properties);
+                        }
+                        else
+                        {
+                            ParseDynamicProperties(propertiesText, parsedQuery.Properties);
+                        }
+                    }
+                    else
+                    {
+                        ParseDynamicProperties(propertiesText, parsedQuery.Properties);
+                    }
                 }
                 else if (patternIndex == 1) // Pattern 2 : avec guillemets
                 {
@@ -3156,6 +3182,28 @@ public class NaturalLanguageParser
     {
         Console.WriteLine($"DEBUG: ParseDynamicProperties - Input: '{propertiesText}'");
         
+        // Vérifier si c'est le format "properties {...}" ou "with properties {...}"
+        if (propertiesText.StartsWith("properties", StringComparison.OrdinalIgnoreCase))
+        {
+            var braceMatch = Regex.Match(propertiesText, @"properties\s*\{([^}]+)\}", RegexOptions.IgnoreCase);
+            if (braceMatch.Success)
+            {
+                var propertiesContent = braceMatch.Groups[1].Value.Trim();
+                ParsePropertiesFromBraceContent(propertiesContent, properties);
+                return;
+            }
+        }
+        else if (propertiesText.StartsWith("with properties", StringComparison.OrdinalIgnoreCase))
+        {
+            var braceMatch = Regex.Match(propertiesText, @"with\s+properties\s*\{([^}]+)\}", RegexOptions.IgnoreCase);
+            if (braceMatch.Success)
+            {
+                var propertiesContent = braceMatch.Groups[1].Value.Trim();
+                ParsePropertiesFromBraceContent(propertiesContent, properties);
+                return;
+            }
+        }
+        
         // Approche simple et directe : diviser par " and " et parser chaque partie
         var parts = propertiesText.Split(new[] { " and " }, StringSplitOptions.RemoveEmptyEntries);
         
@@ -3851,6 +3899,176 @@ public class NaturalLanguageParser
         var conditionsText = match.Groups[2].Value.Trim();
         parsedQuery.BatchType = BatchOperationType.Delete;
         ParseConditionsWithSubQueries(conditionsText, parsedQuery.Conditions, parsedQuery);
+    }
+
+    /// <summary>
+    /// Parse les propriétés depuis le contenu entre accolades
+    /// Format : {name: "value", age: 30, department: "IT"}
+    /// </summary>
+    private void ParsePropertiesFromBraceContent(string content, Dictionary<string, object> properties)
+    {
+        Console.WriteLine($"DEBUG: ParsePropertiesFromBraceContent - Input: '{content}'");
+        
+        // Diviser par virgules pour traiter chaque propriété
+        var parts = content.Split(',');
+        
+        foreach (var part in parts)
+        {
+            var trimmedPart = part.Trim();
+            if (string.IsNullOrEmpty(trimmedPart)) continue;
+            
+            // Chercher le pattern "key: value"
+            var colonIndex = trimmedPart.IndexOf(':');
+            if (colonIndex > 0)
+            {
+                var key = trimmedPart.Substring(0, colonIndex).Trim();
+                var value = trimmedPart.Substring(colonIndex + 1).Trim();
+                
+                Console.WriteLine($"DEBUG: Parsing property '{key}' = '{value}'");
+                
+                // Supprimer les guillemets si présents
+                if (value.StartsWith("\"") && value.EndsWith("\""))
+                {
+                    value = value.Substring(1, value.Length - 2);
+                }
+                else if (value.StartsWith("'") && value.EndsWith("'"))
+                {
+                    value = value.Substring(1, value.Length - 2);
+                }
+                
+                // Parser la valeur
+                try
+                {
+                    properties[key] = ParseDynamicValue(value);
+                    Console.WriteLine($"DEBUG: Added property: {key} = {properties[key]}");
+                }
+                catch (Exception ex)
+                {
+                    // En cas d'erreur, utiliser la valeur brute
+                    properties[key] = value;
+                    Console.WriteLine($"DEBUG: Added property (fallback): {key} = {value}");
+                }
+            }
+        }
+        
+        Console.WriteLine($"DEBUG: Final properties from brace: {string.Join(", ", properties.Select(kv => $"{kv.Key}={kv.Value}"))}");
+    }
+
+    /// <summary>
+    /// Parse une requête de jointure virtuelle
+    /// Exemples :
+    /// - "join persons with projects via works_on"
+    /// - "virtual join persons and projects where department = 'IT'"
+    /// - "merge persons with companies on company_id"
+    /// </summary>
+    private void ParseVirtualJoin(string query, ParsedQuery parsedQuery)
+    {
+        Console.WriteLine($"DEBUG: ParseVirtualJoin - Query: {query}");
+        
+        // Patterns pour les jointures virtuelles
+        var patterns = new[]
+        {
+            // Pattern 1: "join persons with projects via works_on"
+            @"join\s+(\w+)\s+with\s+(\w+)\s+via\s+(\w+)",
+            
+            // Pattern 2: "virtual join persons and projects where department = 'IT'"
+            @"(?:virtual\s+)?join\s+(\w+)\s+and\s+(\w+)(?:\s+where\s+(.+))?",
+            
+            // Pattern 3: "merge persons with companies on company_id"
+            @"merge\s+(\w+)\s+with\s+(\w+)\s+on\s+(\w+)",
+            
+            // Pattern 4: "combine persons and projects via works_on where age > 25"
+            @"combine\s+(\w+)\s+and\s+(\w+)\s+via\s+(\w+)(?:\s+where\s+(.+))?",
+            
+            // Pattern 5: "join persons with projects within 3 steps"
+            @"join\s+(\w+)\s+with\s+(\w+)\s+within\s+(\d+)\s+steps",
+            
+            // Pattern 6: "virtual join persons and projects bidirectional"
+            @"(?:virtual\s+)?join\s+(\w+)\s+and\s+(\w+)\s+bidirectional"
+        };
+
+        foreach (var pattern in patterns)
+        {
+            var match = Regex.Match(query, pattern, RegexOptions.IgnoreCase);
+            if (match.Success)
+            {
+                Console.WriteLine($"DEBUG: ParseVirtualJoin - Pattern matched: {pattern}");
+                
+                var virtualJoin = new VirtualJoin();
+                
+                switch (pattern)
+                {
+                    case @"join\s+(\w+)\s+with\s+(\w+)\s+via\s+(\w+)":
+                        virtualJoin.SourceNodeLabel = NormalizeLabel(match.Groups[1].Value);
+                        virtualJoin.TargetNodeLabel = NormalizeLabel(match.Groups[2].Value);
+                        virtualJoin.EdgeType = match.Groups[3].Value;
+                        break;
+                        
+                    case @"(?:virtual\s+)?join\s+(\w+)\s+and\s+(\w+)(?:\s+where\s+(.+))?":
+                        virtualJoin.SourceNodeLabel = NormalizeLabel(match.Groups[1].Value);
+                        virtualJoin.TargetNodeLabel = NormalizeLabel(match.Groups[2].Value);
+                        if (match.Groups.Count > 3 && !string.IsNullOrEmpty(match.Groups[3].Value))
+                        {
+                            ParseConditionsWithSubQueries(match.Groups[3].Value, virtualJoin.JoinConditions, parsedQuery);
+                        }
+                        break;
+                        
+                    case @"merge\s+(\w+)\s+with\s+(\w+)\s+on\s+(\w+)":
+                        virtualJoin.SourceNodeLabel = NormalizeLabel(match.Groups[1].Value);
+                        virtualJoin.TargetNodeLabel = NormalizeLabel(match.Groups[2].Value);
+                        virtualJoin.JoinProperty = match.Groups[3].Value;
+                        virtualJoin.JoinOperator = "=";
+                        break;
+                        
+                    case @"combine\s+(\w+)\s+and\s+(\w+)\s+via\s+(\w+)(?:\s+where\s+(.+))?":
+                        virtualJoin.SourceNodeLabel = NormalizeLabel(match.Groups[1].Value);
+                        virtualJoin.TargetNodeLabel = NormalizeLabel(match.Groups[2].Value);
+                        virtualJoin.EdgeType = match.Groups[3].Value;
+                        if (match.Groups.Count > 4 && !string.IsNullOrEmpty(match.Groups[4].Value))
+                        {
+                            ParseConditionsWithSubQueries(match.Groups[4].Value, virtualJoin.JoinConditions, parsedQuery);
+                        }
+                        break;
+                        
+                    case @"join\s+(\w+)\s+with\s+(\w+)\s+within\s+(\d+)\s+steps":
+                        virtualJoin.SourceNodeLabel = NormalizeLabel(match.Groups[1].Value);
+                        virtualJoin.TargetNodeLabel = NormalizeLabel(match.Groups[2].Value);
+                        virtualJoin.MaxSteps = int.Parse(match.Groups[3].Value);
+                        break;
+                        
+                    case @"(?:virtual\s+)?join\s+(\w+)\s+and\s+(\w+)\s+bidirectional":
+                        virtualJoin.SourceNodeLabel = NormalizeLabel(match.Groups[1].Value);
+                        virtualJoin.TargetNodeLabel = NormalizeLabel(match.Groups[2].Value);
+                        virtualJoin.IsBidirectional = true;
+                        break;
+                }
+                
+                // Déterminer le type de jointure par défaut
+                parsedQuery.JoinType = "inner";
+                
+                // Ajouter la jointure virtuelle à la requête
+                parsedQuery.VirtualJoins.Add(virtualJoin);
+                
+                Console.WriteLine($"DEBUG: ParseVirtualJoin - Virtual join created: {virtualJoin.SourceNodeLabel} -> {virtualJoin.TargetNodeLabel}");
+                return;
+            }
+        }
+        
+        // Si aucun pattern ne correspond, essayer de parser comme une requête de recherche avec jointure
+        var fallbackPattern = @"(?:virtual\s+)?join\s+(\w+)(?:\s+where\s+(.+))?";
+        var fallbackMatch = Regex.Match(query, fallbackPattern, RegexOptions.IgnoreCase);
+        if (fallbackMatch.Success)
+        {
+            parsedQuery.NodeLabel = NormalizeLabel(fallbackMatch.Groups[1].Value);
+            if (fallbackMatch.Groups.Count > 2 && !string.IsNullOrEmpty(fallbackMatch.Groups[2].Value))
+            {
+                ParseConditionsWithSubQueries(fallbackMatch.Groups[2].Value, parsedQuery.Conditions, parsedQuery);
+            }
+        }
+        else
+        {
+            throw new ArgumentException($"Format de jointure virtuelle non reconnu : {query}");
+        }
     }
 }
 
