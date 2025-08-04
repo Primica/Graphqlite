@@ -19,6 +19,7 @@ public class GraphQLiteEngine : IDisposable
     private readonly NaturalLanguageParser _parser;
     private readonly VariableManager _variableManager;
     private readonly QueryCacheManager _cacheManager;
+    private readonly GraphOptimizationEngine _optimizationEngine;
 
     public GraphQLiteEngine(string databasePath)
     {
@@ -26,6 +27,7 @@ public class GraphQLiteEngine : IDisposable
         _parser = new NaturalLanguageParser();
         _variableManager = new VariableManager();
         _cacheManager = new QueryCacheManager();
+        _optimizationEngine = new GraphOptimizationEngine(_storage);
     }
 
     /// <summary>
@@ -121,6 +123,7 @@ public class GraphQLiteEngine : IDisposable
             QueryType.ShowIndexStats => ShowIndexStatsAsync(),
             QueryType.AddIndexProperty => AddIndexPropertyAsync(query),
             QueryType.RemoveIndexProperty => RemoveIndexPropertyAsync(query),
+            QueryType.GraphOptimization => ExecuteGraphOptimizationAsync(query),
             _ => throw new NotSupportedException($"Type de requête non supporté : {query.Type}")
         };
     }
@@ -4854,7 +4857,424 @@ public class GraphQLiteEngine : IDisposable
         }
     }
 
+    /// <summary>
+    /// Exécute les optimisations de graphes intelligentes
+    /// </summary>
+    private async Task<QueryResult> ExecuteGraphOptimizationAsync(ParsedQuery query)
+    {
+        try
+        {
+            var algorithm = query.Properties.GetValueOrDefault("algorithm")?.ToString() ?? "intelligent_optimization";
+            var fromNode = query.FromNode;
+            var toNode = query.ToNode;
+            var weightProperty = query.Properties.GetValueOrDefault("weight_property")?.ToString();
+            var specificAlgorithm = query.Properties.GetValueOrDefault("algorithm_name")?.ToString();
 
+            return algorithm switch
+            {
+                "dijkstra" => await ExecuteDijkstraAsync(fromNode, toNode, weightProperty),
+                "astar" => await ExecuteAStarAsync(fromNode, toNode, weightProperty),
+                "floyd_warshall" => await ExecuteFloydWarshallAsync(),
+                "connected_components" => await ExecuteConnectedComponentsAsync(),
+                "cycle_detection" => await ExecuteCycleDetectionAsync(),
+                "graph_diameter" => await ExecuteGraphDiameterAsync(),
+                "graph_radius" => await ExecuteGraphRadiusAsync(),
+                "closeness_centrality" => await ExecuteClosenessCentralityAsync(),
+                "bridges" => await ExecuteBridgesAsync(),
+                "articulation_points" => await ExecuteArticulationPointsAsync(),
+                "performance_metrics" => await ExecutePerformanceMetricsAsync(),
+                "intelligent_optimization" => await ExecuteIntelligentOptimizationAsync(fromNode, toNode, specificAlgorithm, weightProperty),
+                "graph_analysis" => await ExecuteGraphAnalysisAsync(query),
+                _ => new QueryResult { Success = false, Error = $"Algorithme d'optimisation non reconnu : {algorithm}" }
+            };
+        }
+        catch (Exception ex)
+        {
+            return new QueryResult { Success = false, Error = $"Erreur lors de l'optimisation : {ex.Message}" };
+        }
+    }
+
+    /// <summary>
+    /// Optimisation intelligente qui sélectionne automatiquement le meilleur algorithme
+    /// </summary>
+    private async Task<QueryResult> ExecuteIntelligentOptimizationAsync(string? fromNode, string? toNode, string? specificAlgorithm, string? weightProperty)
+    {
+        try
+        {
+            // Analyser les caractéristiques du graphe
+            var allNodes = _storage.GetAllNodes();
+            var allEdges = _storage.GetAllEdges();
+            var graphDensity = (double)allEdges.Count / Math.Max(1, allNodes.Count * (allNodes.Count - 1));
+            var graphSize = allNodes.Count;
+            var avgDegree = allEdges.Count * 2.0 / Math.Max(1, allNodes.Count);
+
+            // Sélectionner l'algorithme optimal basé sur les caractéristiques
+            var selectedAlgorithm = specificAlgorithm ?? SelectOptimalAlgorithm(graphDensity, graphSize, avgDegree, fromNode, toNode);
+
+            var result = selectedAlgorithm switch
+            {
+                "dijkstra" => await ExecuteDijkstraAsync(fromNode, toNode, weightProperty),
+                "astar" => await ExecuteAStarAsync(fromNode, toNode, weightProperty),
+                "floyd_warshall" => await ExecuteFloydWarshallAsync(),
+                _ => await ExecuteDijkstraAsync(fromNode, toNode, weightProperty)
+            };
+
+            // Ajouter les métriques d'optimisation intelligente
+            if (result.Success)
+            {
+                var optimizationData = new
+                {
+                    SelectedAlgorithm = selectedAlgorithm,
+                    GraphDensity = graphDensity,
+                    GraphSize = graphSize,
+                    AverageDegree = avgDegree,
+                    OptimizationReason = GetOptimizationReason(selectedAlgorithm, graphDensity, graphSize, avgDegree),
+                    OriginalResult = result.Data
+                };
+                result.Data = optimizationData;
+            }
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            return new QueryResult { Success = false, Error = $"Erreur lors de l'optimisation intelligente : {ex.Message}" };
+        }
+    }
+
+    /// <summary>
+    /// Sélectionne l'algorithme optimal basé sur les caractéristiques du graphe
+    /// </summary>
+    private string SelectOptimalAlgorithm(double density, int size, double avgDegree, string? fromNode, string? toNode)
+    {
+        // Heuristiques d'optimisation intelligente
+        if (size < 100)
+        {
+            // Petits graphes : Dijkstra est souvent plus rapide
+            return "dijkstra";
+        }
+        else if (density > 0.3)
+        {
+            // Graphes denses : A* avec heuristique peut être plus efficace
+            return "astar";
+        }
+        else if (avgDegree > 10)
+        {
+            // Haut degré moyen : A* pour éviter l'explosion combinatoire
+            return "astar";
+        }
+        else if (fromNode != null && toNode != null)
+        {
+            // Recherche de chemin spécifique : A* avec heuristique
+            return "astar";
+        }
+        else
+        {
+            // Par défaut : Dijkstra pour sa simplicité et fiabilité
+            return "dijkstra";
+        }
+    }
+
+    /// <summary>
+    /// Génère la raison de l'optimisation sélectionnée
+    /// </summary>
+    private string GetOptimizationReason(string algorithm, double density, int size, double avgDegree)
+    {
+        return algorithm switch
+        {
+            "dijkstra" => $"Dijkstra sélectionné (graphe de {size} nœuds, densité {density:F2}, degré moyen {avgDegree:F1})",
+            "astar" => $"A* sélectionné (graphe dense de {size} nœuds, densité {density:F2}, degré moyen {avgDegree:F1})",
+            "floyd_warshall" => $"Floyd-Warshall sélectionné (calcul de toutes les paires de chemins)",
+            _ => $"Algorithme {algorithm} sélectionné"
+        };
+    }
+
+    private async Task<QueryResult> ExecuteDijkstraAsync(string? fromNode, string? toNode, string? weightProperty)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(fromNode) || string.IsNullOrEmpty(toNode))
+            {
+                return new QueryResult { Success = false, Error = "Nœuds de départ et d'arrivée requis pour Dijkstra" };
+            }
+
+            var fromId = FindNodeIdByName(fromNode);
+            var toId = FindNodeIdByName(toNode);
+
+            if (fromId == Guid.Empty || toId == Guid.Empty)
+            {
+                return new QueryResult { Success = false, Error = "Nœuds non trouvés" };
+            }
+
+            var path = _optimizationEngine.FindShortestPathDijkstra(fromId, toId, weightProperty);
+
+            return new QueryResult
+            {
+                Success = true,
+                Message = $"Chemin Dijkstra trouvé de {fromNode} à {toNode}",
+                Data = new { Path = path, Algorithm = "Dijkstra", WeightProperty = weightProperty }
+            };
+        }
+        catch (Exception ex)
+        {
+            return new QueryResult { Success = false, Error = $"Erreur Dijkstra : {ex.Message}" };
+        }
+    }
+
+    private async Task<QueryResult> ExecuteAStarAsync(string? fromNode, string? toNode, string? weightProperty)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(fromNode) || string.IsNullOrEmpty(toNode))
+            {
+                return new QueryResult { Success = false, Error = "Nœuds de départ et d'arrivée requis pour A*" };
+            }
+
+            var fromId = FindNodeIdByName(fromNode);
+            var toId = FindNodeIdByName(toNode);
+
+            if (fromId == Guid.Empty || toId == Guid.Empty)
+            {
+                return new QueryResult { Success = false, Error = "Nœuds non trouvés" };
+            }
+
+            var path = _optimizationEngine.FindPathAStar(fromId, toId, weightProperty);
+
+            return new QueryResult
+            {
+                Success = true,
+                Message = $"Chemin A* trouvé de {fromNode} à {toNode}",
+                Data = new { Path = path, Algorithm = "A*", WeightProperty = weightProperty }
+            };
+        }
+        catch (Exception ex)
+        {
+            return new QueryResult { Success = false, Error = $"Erreur A* : {ex.Message}" };
+        }
+    }
+
+    private async Task<QueryResult> ExecuteFloydWarshallAsync()
+    {
+        try
+        {
+            var allPairs = _optimizationEngine.ComputeAllPairsShortestPaths();
+            var nodeCount = allPairs.Count;
+
+            return new QueryResult
+            {
+                Success = true,
+                Message = $"Floyd-Warshall calculé pour {nodeCount} nœuds",
+                Data = new { AllPairsShortestPaths = allPairs, NodeCount = nodeCount }
+            };
+        }
+        catch (Exception ex)
+        {
+            return new QueryResult { Success = false, Error = $"Erreur Floyd-Warshall : {ex.Message}" };
+        }
+    }
+
+    private async Task<QueryResult> ExecuteConnectedComponentsAsync()
+    {
+        try
+        {
+            var components = _optimizationEngine.FindConnectedComponents();
+
+            return new QueryResult
+            {
+                Success = true,
+                Message = $"{components.Count} composantes connexes trouvées",
+                Data = new { Components = components, ComponentCount = components.Count }
+            };
+        }
+        catch (Exception ex)
+        {
+            return new QueryResult { Success = false, Error = $"Erreur composantes connexes : {ex.Message}" };
+        }
+    }
+
+    private async Task<QueryResult> ExecuteCycleDetectionAsync()
+    {
+        try
+        {
+            var cycles = _optimizationEngine.DetectCycles();
+
+            return new QueryResult
+            {
+                Success = true,
+                Message = $"{cycles.Count} cycles détectés",
+                Data = new { Cycles = cycles, CycleCount = cycles.Count }
+            };
+        }
+        catch (Exception ex)
+        {
+            return new QueryResult { Success = false, Error = $"Erreur détection de cycles : {ex.Message}" };
+        }
+    }
+
+    private async Task<QueryResult> ExecuteGraphDiameterAsync()
+    {
+        try
+        {
+            var diameter = _optimizationEngine.CalculateGraphDiameter();
+
+            return new QueryResult
+            {
+                Success = true,
+                Message = $"Diamètre du graphe : {diameter}",
+                Data = new { Diameter = diameter }
+            };
+        }
+        catch (Exception ex)
+        {
+            return new QueryResult { Success = false, Error = $"Erreur calcul du diamètre : {ex.Message}" };
+        }
+    }
+
+    private async Task<QueryResult> ExecuteGraphRadiusAsync()
+    {
+        try
+        {
+            var radius = _optimizationEngine.CalculateGraphRadius();
+
+            return new QueryResult
+            {
+                Success = true,
+                Message = $"Rayon du graphe : {radius}",
+                Data = new { Radius = radius }
+            };
+        }
+        catch (Exception ex)
+        {
+            return new QueryResult { Success = false, Error = $"Erreur calcul du rayon : {ex.Message}" };
+        }
+    }
+
+    private async Task<QueryResult> ExecuteClosenessCentralityAsync()
+    {
+        try
+        {
+            var centrality = _optimizationEngine.CalculateClosenessCentrality();
+
+            return new QueryResult
+            {
+                Success = true,
+                Message = $"Centralité de proximité calculée pour {centrality.Count} nœuds",
+                Data = new { Centrality = centrality, NodeCount = centrality.Count }
+            };
+        }
+        catch (Exception ex)
+        {
+            return new QueryResult { Success = false, Error = $"Erreur calcul de centralité : {ex.Message}" };
+        }
+    }
+
+    private async Task<QueryResult> ExecuteBridgesAsync()
+    {
+        try
+        {
+            var bridges = _optimizationEngine.FindBridges();
+
+            return new QueryResult
+            {
+                Success = true,
+                Message = $"{bridges.Count} ponts trouvés",
+                Data = new { Bridges = bridges, BridgeCount = bridges.Count }
+            };
+        }
+        catch (Exception ex)
+        {
+            return new QueryResult { Success = false, Error = $"Erreur recherche de ponts : {ex.Message}" };
+        }
+    }
+
+    private async Task<QueryResult> ExecuteArticulationPointsAsync()
+    {
+        try
+        {
+            var articulationPoints = _optimizationEngine.FindArticulationPoints();
+
+            return new QueryResult
+            {
+                Success = true,
+                Message = $"{articulationPoints.Count} points d'articulation trouvés",
+                Data = new { ArticulationPoints = articulationPoints, PointCount = articulationPoints.Count }
+            };
+        }
+        catch (Exception ex)
+        {
+            return new QueryResult { Success = false, Error = $"Erreur recherche de points d'articulation : {ex.Message}" };
+        }
+    }
+
+    private async Task<QueryResult> ExecutePerformanceMetricsAsync()
+    {
+        try
+        {
+            var metrics = _optimizationEngine.GetPerformanceMetrics();
+
+            return new QueryResult
+            {
+                Success = true,
+                Message = "Métriques de performance des algorithmes",
+                Data = new { 
+                    Metrics = metrics,
+                    CacheHitRate = metrics.CacheHitRate,
+                    AverageExecutionTime = metrics.AverageExecutionTime,
+                    AlgorithmPerformance = metrics.AlgorithmPerformance
+                }
+            };
+        }
+        catch (Exception ex)
+        {
+            return new QueryResult { Success = false, Error = $"Erreur métriques de performance : {ex.Message}" };
+        }
+    }
+
+    /// <summary>
+    /// Trouve l'ID d'un nœud par son nom
+    /// </summary>
+    private Guid FindNodeIdByName(string nodeName)
+    {
+        var allNodes = _storage.GetAllNodes();
+        var node = allNodes.FirstOrDefault(n => 
+            n.Properties.TryGetValue("name", out var name) && 
+            name?.ToString()?.Equals(nodeName, StringComparison.OrdinalIgnoreCase) == true);
+        
+        return node?.Id ?? Guid.Empty;
+    }
+
+    /// <summary>
+    /// Exécute l'analyse de graphe basée sur la commande calculate
+    /// </summary>
+    private async Task<QueryResult> ExecuteGraphAnalysisAsync(ParsedQuery query)
+    {
+        try
+        {
+            // Extraire le type d'analyse depuis la requête originale
+            var originalQuery = query.Properties.GetValueOrDefault("original_query")?.ToString() ?? "";
+            
+            if (originalQuery.Contains("diameter"))
+            {
+                return await ExecuteGraphDiameterAsync();
+            }
+            else if (originalQuery.Contains("radius"))
+            {
+                return await ExecuteGraphRadiusAsync();
+            }
+            else if (originalQuery.Contains("centrality"))
+            {
+                return await ExecuteClosenessCentralityAsync();
+            }
+            else
+            {
+                return new QueryResult { Success = false, Error = "Type d'analyse de graphe non reconnu" };
+            }
+        }
+        catch (Exception ex)
+        {
+            return new QueryResult { Success = false, Error = $"Erreur lors de l'analyse de graphe : {ex.Message}" };
+        }
+    }
 }
 /// <summary>
 /// Résultat d'une requête GraphQLite

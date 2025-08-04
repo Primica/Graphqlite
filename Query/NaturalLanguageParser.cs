@@ -83,7 +83,21 @@ public class NaturalLanguageParser
         { "nthvalue", QueryType.WindowFunction },
                             { "indexed", QueryType.ShowIndexedProperties },
                     { "index", QueryType.ShowIndexedProperties },
-                    { "stats", QueryType.ShowIndexStats }
+                    { "stats", QueryType.ShowIndexStats },
+                    { "optimize", QueryType.GraphOptimization },
+                    { "dijkstra", QueryType.GraphOptimization },
+                    { "astar", QueryType.GraphOptimization },
+                    { "floyd", QueryType.GraphOptimization },
+                    { "components", QueryType.GraphOptimization },
+                    { "cycles", QueryType.GraphOptimization },
+                    { "diameter", QueryType.GraphOptimization },
+                    { "radius", QueryType.GraphOptimization },
+                    { "centrality", QueryType.GraphOptimization },
+                    { "bridges", QueryType.GraphOptimization },
+                    { "articulation", QueryType.GraphOptimization },
+                    { "performance", QueryType.GraphOptimization },
+                    { "calculate", QueryType.GraphOptimization },
+                    { "detect", QueryType.GraphOptimization }
     };
 
     /// <summary>
@@ -118,6 +132,23 @@ public class NaturalLanguageParser
         else if (queryForTypeDetection.StartsWith("remove index property"))
         {
             parsedQuery.Type = QueryType.RemoveIndexProperty;
+        }
+        else if (queryForTypeDetection.StartsWith("optimize") || 
+                 queryForTypeDetection.StartsWith("dijkstra") ||
+                 queryForTypeDetection.StartsWith("astar") ||
+                 queryForTypeDetection.StartsWith("floyd") ||
+                 queryForTypeDetection.Contains("components") ||
+                 queryForTypeDetection.Contains("cycles") ||
+                 queryForTypeDetection.Contains("diameter") ||
+                 queryForTypeDetection.Contains("radius") ||
+                 queryForTypeDetection.Contains("centrality") ||
+                 queryForTypeDetection.Contains("bridges") ||
+                 queryForTypeDetection.Contains("articulation") ||
+                 queryForTypeDetection.Contains("performance metrics") ||
+                 queryForTypeDetection.StartsWith("detect") ||
+                 queryForTypeDetection.StartsWith("calculate"))
+        {
+            parsedQuery.Type = QueryType.GraphOptimization;
         }
 
         // Pour les définitions de variables, utiliser la chaîne originale
@@ -199,6 +230,9 @@ public class NaturalLanguageParser
                 break;
             case QueryType.RemoveIndexProperty:
                 ParseRemoveIndexProperty(queryForParsing, parsedQuery);
+                break;
+            case QueryType.GraphOptimization:
+                ParseGraphOptimization(queryForParsing, parsedQuery);
                 break;
             default:
                 throw new NotSupportedException($"Type de requête non reconnu dans : {query}");
@@ -4418,7 +4452,85 @@ public class NaturalLanguageParser
         }
     }
 
+    /// <summary>
+    /// Parse les commandes d'optimisation de graphes intelligente
+    /// Exemples :
+    /// - optimize path from Alice to Bob
+    /// - dijkstra from Alice to Bob with weight distance
+    /// - astar from Alice to Bob
+    /// - floyd warshall
+    /// - find components
+    /// - detect cycles
+    /// - calculate diameter
+    /// - show performance metrics
+    /// </summary>
+    private void ParseGraphOptimization(string query, ParsedQuery parsedQuery)
+    {
+        // Patterns pour les différentes optimisations
+        var patterns = new Dictionary<string, (string pattern, string algorithm)>
+        {
+            // Commandes calculate en premier (plus spécifiques)
+            { "calculate_diameter", (@"calculate\s+diameter", "graph_diameter") },
+            { "calculate_radius", (@"calculate\s+radius", "graph_radius") },
+            { "calculate_centrality", (@"calculate\s+centrality", "closeness_centrality") },
+            { "calculate", (@"calculate\s+(diameter|radius|centrality)", "graph_analysis") },
+            
+            // Autres commandes d'optimisation
+            { "dijkstra", (@"dijkstra\s+(?:from\s+)?(\w+)\s+(?:to\s+)?(\w+)(?:\s+with\s+weight\s+(\w+))?", "dijkstra") },
+            { "astar", (@"astar\s+(?:from\s+)?(\w+)\s+(?:to\s+)?(\w+)(?:\s+with\s+weight\s+(\w+))?", "astar") },
+            { "floyd", (@"floyd\s+warshall", "floyd_warshall") },
+            { "components", (@"(?:find\s+)?(?:connected\s+)?components", "connected_components") },
+            { "cycles", (@"(?:find\s+)?(?:detect\s+)?cycles", "cycle_detection") },
+            { "diameter", (@"(?:calculate\s+)?(?:graph\s+)?diameter", "graph_diameter") },
+            { "radius", (@"(?:calculate\s+)?(?:graph\s+)?radius", "graph_radius") },
+            { "centrality", (@"(?:calculate\s+)?(?:closeness\s+)?centrality", "closeness_centrality") },
+            { "bridges", (@"(?:find\s+)?bridges", "bridges") },
+            { "articulation", (@"(?:find\s+)?(?:articulation\s+)?points", "articulation_points") },
+            { "performance", (@"(?:show\s+)?performance\s+(?:metrics)?", "performance_metrics") },
+            { "optimize", (@"optimize\s+(?:path\s+)?(?:from\s+)?(\w+)\s+(?:to\s+)?(\w+)(?:\s+with\s+algorithm\s+(\w+))?(?:\s+with\s+weight\s+(\w+))?", "intelligent_optimization") },
+            { "detect", (@"detect\s+cycles", "cycle_detection") }
+        };
 
+        foreach (var (key, (pattern, algorithm)) in patterns)
+        {
+            var match = Regex.Match(query, pattern, RegexOptions.IgnoreCase);
+            if (match.Success)
+            {
+                parsedQuery.Properties["algorithm"] = algorithm;
+                parsedQuery.Properties["original_query"] = query; // Capturer la requête originale
+                
+                if (match.Groups.Count > 1 && !string.IsNullOrEmpty(match.Groups[1].Value))
+                {
+                    parsedQuery.FromNode = match.Groups[1].Value;
+                }
+                
+                if (match.Groups.Count > 2 && !string.IsNullOrEmpty(match.Groups[2].Value))
+                {
+                    parsedQuery.ToNode = match.Groups[2].Value;
+                }
+                
+                if (match.Groups.Count > 3 && !string.IsNullOrEmpty(match.Groups[3].Value))
+                {
+                    parsedQuery.Properties["algorithm_name"] = match.Groups[3].Value;
+                }
+                
+                if (match.Groups.Count > 4 && !string.IsNullOrEmpty(match.Groups[4].Value))
+                {
+                    parsedQuery.Properties["weight_property"] = match.Groups[4].Value;
+                }
+                
+                return;
+            }
+        }
+
+        // Pattern générique pour l'optimisation intelligente
+        var genericMatch = Regex.Match(query, @"optimize\s+(.+)", RegexOptions.IgnoreCase);
+        if (genericMatch.Success)
+        {
+            parsedQuery.Properties["algorithm"] = "intelligent_optimization";
+            parsedQuery.Properties["optimization_query"] = genericMatch.Groups[1].Value.Trim();
+        }
+    }
 }
 
 

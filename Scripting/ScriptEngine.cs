@@ -351,7 +351,9 @@ public class ScriptEngine
                     "sort", "having", "row_number", "rownumber", "rank", "dense_rank", 
                     "denserank", "percent_rank", "percentrank", "ntile", "lead", "lag", 
                     "first_value", "firstvalue", "last_value", "lastvalue", "nth_value", 
-                    "nthvalue" 
+                    "nthvalue", "optimize", "dijkstra", "astar", "floyd", "components", 
+                    "cycles", "diameter", "radius", "centrality", "bridges", "articulation", 
+                    "performance", "detect", "calculate" 
                 };
                 
                 // Vérification spéciale pour les fonctions de fenêtre
