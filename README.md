@@ -523,7 +523,7 @@ dotnet run -- --db production --script migration
 - **Analyse de données** avec agrégations et filtres complexes
 - **Relations complexes** avec jointures virtuelles et sous-requêtes
 
-## 🚀 Fonctionnalités récemment implémentées (v1.6)
+## 🚀 Fonctionnalités récemment implémentées (v1.7)
 
 ### **Jointures virtuelles** ✅
 - Support complet des jointures via type d'arête : `join persons with projects via works_on`
@@ -569,6 +569,15 @@ dotnet run -- --db production --script migration
 - Thread-safe avec structures de données concurrentes
 - Reconstruction automatique des index lors du chargement de la base
 
+### **Cache intelligent automatique** ✅
+- Cache transparent fonctionnant automatiquement en arrière-plan
+- Expiration adaptative basée sur la fréquence d'utilisation (10-30 minutes)
+- Invalidation automatique lors des modifications de données
+- Gestion intelligente de la mémoire avec éviction optimisée
+- Score de performance multi-critères (fréquence, récence, âge)
+- Thread-safe avec structures de données concurrentes
+- Nettoyage automatique des entrées expirées
+
 ---
 
 ## 📝 Roadmap et extensions possibles
@@ -581,7 +590,7 @@ dotnet run -- --db production --script migration
 
 ### Optimisations de performance
 - **Indexation** : Index sur les propriétés fréquemment utilisées ✅
-- **Cache de requêtes** : Mise en cache des résultats fréquents
+- **Cache intelligent** : Mise en cache automatique des résultats fréquents ✅
 - **Optimisation des algorithmes de graphe** : Dijkstra, A*, Floyd-Warshall
 - **Pagination intelligente** : Pagination avec curseurs
 
@@ -615,4 +624,4 @@ Projet open source conçu pour simplifier l'usage des bases de données orienté
 
 **GraphQLite** - Parce que les graphes ne devraient pas être compliqués.
 
-**Version actuelle** : v1.6 - Système 100% fonctionnel avec jointures virtuelles, sous-requêtes complexes, groupement et tri, fonctions de fenêtre, système d'indexation, et toutes les fonctionnalités avancées opérationnelles
+**Version actuelle** : v1.7 - Système 100% fonctionnel avec jointures virtuelles, sous-requêtes complexes, groupement et tri, fonctions de fenêtre, système d'indexation, cache intelligent automatique, et toutes les fonctionnalités avancées opérationnelles

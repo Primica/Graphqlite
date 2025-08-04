@@ -213,10 +213,10 @@ public enum QueryType
     OrderBy,
     Having,
     WindowFunction,
-    ShowIndexedProperties,
-    ShowIndexStats,
-    AddIndexProperty,
-    RemoveIndexProperty
+    	ShowIndexedProperties,
+	ShowIndexStats,
+	AddIndexProperty,
+	RemoveIndexProperty
 }
 
 /// <summary>

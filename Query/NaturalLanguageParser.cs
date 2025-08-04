@@ -81,9 +81,9 @@ public class NaturalLanguageParser
         { "lastvalue", QueryType.WindowFunction },
         { "nth_value", QueryType.WindowFunction },
         { "nthvalue", QueryType.WindowFunction },
-        { "indexed", QueryType.ShowIndexedProperties },
-        { "index", QueryType.ShowIndexedProperties },
-        { "stats", QueryType.ShowIndexStats }
+                            { "indexed", QueryType.ShowIndexedProperties },
+                    { "index", QueryType.ShowIndexedProperties },
+                    { "stats", QueryType.ShowIndexStats }
     };
 
     /// <summary>
@@ -4396,7 +4396,7 @@ public class NaturalLanguageParser
         }
     }
 
-    /// <summary>
+        /// <summary>
     /// Parse les commandes de suppression de propriété de l'index
     /// Exemples :
     /// - remove index property "city"
@@ -4406,7 +4406,7 @@ public class NaturalLanguageParser
     {
         var pattern = @"remove\s+index\s+property\s+[""]?([^""\s]+)[""]?";
         var match = Regex.Match(query, pattern, RegexOptions.IgnoreCase);
-        
+
         if (match.Success)
         {
             var propertyName = match.Groups[1].Value.Trim();
@@ -4417,6 +4417,8 @@ public class NaturalLanguageParser
             throw new ArgumentException($"Format de commande de suppression d'index non reconnu : {query}");
         }
     }
+
+
 }
 
 

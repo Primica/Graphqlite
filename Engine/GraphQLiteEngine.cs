@@ -18,12 +18,14 @@ public class GraphQLiteEngine : IDisposable
     private readonly GraphStorage _storage;
     private readonly NaturalLanguageParser _parser;
     private readonly VariableManager _variableManager;
+    private readonly QueryCacheManager _cacheManager;
 
     public GraphQLiteEngine(string databasePath)
     {
         _storage = new GraphStorage(databasePath);
         _parser = new NaturalLanguageParser();
         _variableManager = new VariableManager();
+        _cacheManager = new QueryCacheManager();
     }
 
     /// <summary>
@@ -52,11 +54,30 @@ public class GraphQLiteEngine : IDisposable
             // Remplacer les variables dans la requête parsée
             ReplaceVariablesInParsedQuery(parsedQuery);
             
+            // Cache intelligent automatique pour toutes les requêtes
+            var cacheKey = _cacheManager.GenerateCacheKey(parsedQuery);
+            
+            // Vérifier le cache pour les requêtes de lecture
+            if (!IsModifyingOperation(parsedQuery.Type))
+            {
+                if (_cacheManager.TryGetCachedResult(cacheKey, out var cachedResult))
+                {
+                    return cachedResult!;
+                }
+            }
+            
             var result = await ExecuteParsedQueryAsync(parsedQuery);
             
-            // Sauvegarder après les opérations de modification
+            // Mettre en cache automatiquement les résultats de lecture
+            if (!IsModifyingOperation(parsedQuery.Type))
+            {
+                _cacheManager.CacheResult(cacheKey, result);
+            }
+            
+            // Invalider le cache et sauvegarder après les opérations de modification
             if (IsModifyingOperation(parsedQuery.Type))
             {
+                _cacheManager.InvalidateCacheForModification(parsedQuery.Type, parsedQuery.NodeLabel);
                 await _storage.SaveAsync();
             }
 
@@ -4832,6 +4853,8 @@ public class GraphQLiteEngine : IDisposable
             };
         }
     }
+
+
 }
 /// <summary>
 /// Résultat d'une requête GraphQLite
