@@ -163,6 +163,34 @@ find persons reachable from Alice in 2 steps where age > 25
 find persons within 2 steps from TechCorp where role = "developer"
 ```
 
+### **Pagination intelligente avec curseurs**
+```gqls
+# Pagination simple des nœuds
+paginate person limit 10;
+paginate company limit 5;
+
+# Pagination des arêtes
+paginate edges limit 20;
+
+# Pagination avec conditions
+cursor person where age > 25 limit 15;
+cursor company where industry = tech limit 10;
+
+# Pagination avec tri
+paginate person order by age desc limit 10;
+cursor person order by name asc limit 5;
+
+# Pagination avec curseur (pour navigation)
+cursor person with cursor ABC123 limit 10;
+```
+
+#### **Avantages de la pagination intelligente**
+- **Performance optimisée** : Évite le chargement de tous les résultats en mémoire
+- **Navigation fluide** : Curseurs pour navigation avant/arrière sans perte de position
+- **Filtrage intelligent** : Support des conditions WHERE et ORDER BY
+- **Cache intégré** : Réutilisation des résultats avec invalidation automatique
+- **Métriques complètes** : Informations sur le nombre total d'éléments et de pages
+
 ### Recherche de chemins avancés
 ```gqls
 # Chemins de base
@@ -654,8 +682,8 @@ optimize path from Alice to Bob with algorithm astar with weight distance;
 ### Optimisations de performance
 - **Indexation** : Index sur les propriétés fréquemment utilisées ✅
 - **Cache intelligent** : Mise en cache automatique des résultats fréquents ✅
-- **Optimisation des algorithmes de graphe** : Dijkstra, A*, Floyd-Warshall
-- **Pagination intelligente** : Pagination avec curseurs
+  - **Optimisation des algorithmes de graphe** : Dijkstra, A*, Floyd-Warshall ✅
+  - **Pagination intelligente** : Pagination avec curseurs ✅
 
 ### Fonctionnalités d'administration
 - **Backup et restauration** : Sauvegarde automatique et restauration

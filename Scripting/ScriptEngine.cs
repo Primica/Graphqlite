@@ -353,7 +353,7 @@ public class ScriptEngine
                     "first_value", "firstvalue", "last_value", "lastvalue", "nth_value", 
                     "nthvalue", "optimize", "dijkstra", "astar", "floyd", "components", 
                     "cycles", "diameter", "radius", "centrality", "bridges", "articulation", 
-                    "performance", "detect", "calculate" 
+                    "performance", "detect", "calculate", "paginate", "cursor" 
                 };
                 
                 // Vérification spéciale pour les fonctions de fenêtre

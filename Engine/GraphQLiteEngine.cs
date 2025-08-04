@@ -20,6 +20,7 @@ public class GraphQLiteEngine : IDisposable
     private readonly VariableManager _variableManager;
     private readonly QueryCacheManager _cacheManager;
     private readonly GraphOptimizationEngine _optimizationEngine;
+    private readonly IntelligentPagination _intelligentPagination;
 
     public GraphQLiteEngine(string databasePath)
     {
@@ -28,6 +29,7 @@ public class GraphQLiteEngine : IDisposable
         _variableManager = new VariableManager();
         _cacheManager = new QueryCacheManager();
         _optimizationEngine = new GraphOptimizationEngine(_storage);
+        _intelligentPagination = new IntelligentPagination(_storage, _cacheManager);
     }
 
     /// <summary>
@@ -124,6 +126,7 @@ public class GraphQLiteEngine : IDisposable
             QueryType.AddIndexProperty => AddIndexPropertyAsync(query),
             QueryType.RemoveIndexProperty => RemoveIndexPropertyAsync(query),
             QueryType.GraphOptimization => ExecuteGraphOptimizationAsync(query),
+            QueryType.IntelligentPagination => ExecuteIntelligentPaginationAsync(query),
             _ => throw new NotSupportedException($"Type de requête non supporté : {query.Type}")
         };
     }
@@ -5273,6 +5276,72 @@ public class GraphQLiteEngine : IDisposable
         catch (Exception ex)
         {
             return new QueryResult { Success = false, Error = $"Erreur lors de l'analyse de graphe : {ex.Message}" };
+        }
+    }
+
+    /// <summary>
+    /// Exécute la pagination intelligente avec curseurs
+    /// </summary>
+    private async Task<QueryResult> ExecuteIntelligentPaginationAsync(ParsedQuery query)
+    {
+        try
+        {
+            var paginationType = query.Properties.GetValueOrDefault("pagination_type")?.ToString() ?? "nodes";
+            var cursor = query.Properties.GetValueOrDefault("cursor")?.ToString();
+            var pageSize = query.Properties.TryGetValue("page_size", out var size) ? Convert.ToInt32(size) : 10;
+            var forward = query.Properties.TryGetValue("forward", out var fwd) ? Convert.ToBoolean(fwd) : true;
+            
+            // Extraire les conditions de tri
+            var orderBy = new List<OrderByClause>();
+            if (query.OrderByClauses.Any())
+            {
+                orderBy = query.OrderByClauses;
+            }
+            
+            if (paginationType == "nodes")
+            {
+                var nodeLabel = query.NodeLabel;
+                var result = await _intelligentPagination.PaginateNodesAsync(
+                    nodeLabel, 
+                    query.Conditions, 
+                    orderBy, 
+                    pageSize, 
+                    cursor, 
+                    forward);
+                
+                return new QueryResult
+                {
+                    Success = true,
+                    Message = $"Pagination intelligente : {result.Items.Count} nœuds (page {result.CurrentPage}/{result.TotalPages})",
+                    Data = result
+                };
+            }
+            else if (paginationType == "edges")
+            {
+                var edgeType = query.EdgeType;
+                var result = await _intelligentPagination.PaginateEdgesAsync(
+                    edgeType, 
+                    query.Conditions, 
+                    orderBy, 
+                    pageSize, 
+                    cursor, 
+                    forward);
+                
+                return new QueryResult
+                {
+                    Success = true,
+                    Message = $"Pagination intelligente : {result.Items.Count} arêtes (page {result.CurrentPage}/{result.TotalPages})",
+                    Data = result
+                };
+            }
+            else
+            {
+                return new QueryResult { Success = false, Error = "Type de pagination non reconnu" };
+            }
+        }
+        catch (Exception ex)
+        {
+            return new QueryResult { Success = false, Error = $"Erreur lors de la pagination intelligente : {ex.Message}" };
         }
     }
 }

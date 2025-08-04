@@ -97,7 +97,9 @@ public class NaturalLanguageParser
                     { "articulation", QueryType.GraphOptimization },
                     { "performance", QueryType.GraphOptimization },
                     { "calculate", QueryType.GraphOptimization },
-                    { "detect", QueryType.GraphOptimization }
+                    { "detect", QueryType.GraphOptimization },
+                    { "paginate", QueryType.IntelligentPagination },
+                    { "cursor", QueryType.IntelligentPagination }
     };
 
     /// <summary>
@@ -150,6 +152,11 @@ public class NaturalLanguageParser
         {
             parsedQuery.Type = QueryType.GraphOptimization;
         }
+        else if (queryForTypeDetection.StartsWith("paginate") ||
+                 queryForTypeDetection.StartsWith("cursor"))
+        {
+            parsedQuery.Type = QueryType.IntelligentPagination;
+        }
 
         // Pour les définitions de variables, utiliser la chaîne originale
         var queryForParsing = parsedQuery.Type == QueryType.DefineVariable ? originalQuery : ConvertToLowerPreservingVariables(originalQuery);
@@ -200,6 +207,9 @@ public class NaturalLanguageParser
                 break;
             case QueryType.SubQuery:
                 ParseSubQuery(queryForParsing, parsedQuery);
+                break;
+            case QueryType.IntelligentPagination:
+                ParseIntelligentPagination(queryForParsing, parsedQuery);
                 break;
             case QueryType.VirtualJoin:
                 ParseVirtualJoin(queryForParsing, parsedQuery);
@@ -4449,6 +4459,100 @@ public class NaturalLanguageParser
         else
         {
             throw new ArgumentException($"Format de commande de suppression d'index non reconnu : {query}");
+        }
+    }
+
+    /// <summary>
+    /// Parse les commandes de pagination intelligente avec curseurs
+    /// Exemples :
+    /// - paginate persons with cursor ABC123 limit 10
+    /// - paginate edges with cursor XYZ789 limit 20
+    /// - cursor persons where age > 25 order by name asc limit 15
+    /// </summary>
+    private void ParseIntelligentPagination(string query, ParsedQuery parsedQuery)
+    {
+        // Pattern pour la pagination avec curseur
+        var cursorPattern = @"(?:paginate|cursor)\s+(\w+)(?:\s+where\s+(.+?))?(?:\s+order\s+by\s+(.+?))?(?:\s+with\s+cursor\s+(\w+))?(?:\s+limit\s+(\d+))?";
+        var match = Regex.Match(query, cursorPattern, RegexOptions.IgnoreCase);
+        
+        if (match.Success)
+        {
+            // Type d'élément (nodes ou edges)
+            var elementType = match.Groups[1].Value.ToLower();
+            parsedQuery.Properties["pagination_type"] = elementType == "edges" ? "edges" : "nodes";
+            
+            if (elementType != "edges")
+            {
+                parsedQuery.NodeLabel = elementType;
+            }
+            else
+            {
+                parsedQuery.EdgeType = elementType;
+            }
+            
+            // Conditions WHERE
+            if (match.Groups[2].Success)
+            {
+                var conditionsText = match.Groups[2].Value.Trim();
+                // Utiliser le parsing simple pour les conditions
+                ParseConditions(conditionsText, parsedQuery.Conditions);
+            }
+            
+            // ORDER BY
+            if (match.Groups[3].Success)
+            {
+                var orderByText = match.Groups[3].Value.Trim();
+                ParseOrderByClauses(orderByText, parsedQuery.OrderByClauses);
+            }
+            
+            // Curseur
+            if (match.Groups[4].Success)
+            {
+                parsedQuery.Properties["cursor"] = match.Groups[4].Value;
+            }
+            
+            // LIMIT
+            if (match.Groups[5].Success)
+            {
+                parsedQuery.Properties["page_size"] = int.Parse(match.Groups[5].Value);
+            }
+            else
+            {
+                parsedQuery.Properties["page_size"] = 10; // Taille par défaut
+            }
+        }
+    }
+
+    /// <summary>
+    /// Parse les clauses ORDER BY
+    /// </summary>
+    private void ParseOrderByClauses(string orderByText, List<OrderByClause> orderByClauses)
+    {
+        var clauses = orderByText.Split(',')
+            .Select(c => c.Trim())
+            .Where(c => !string.IsNullOrEmpty(c))
+            .ToList();
+        
+        foreach (var clause in clauses)
+        {
+            var orderByClause = new OrderByClause();
+            
+            // Vérifier si la direction est spécifiée dans la clause
+            var directionMatch = Regex.Match(clause, @"(.+?)\s+(asc|desc)$", RegexOptions.IgnoreCase);
+            if (directionMatch.Success)
+            {
+                orderByClause.Property = directionMatch.Groups[1].Value.Trim();
+                orderByClause.Direction = directionMatch.Groups[2].Value.ToLowerInvariant() == "desc" 
+                    ? OrderDirection.Descending 
+                    : OrderDirection.Ascending;
+            }
+            else
+            {
+                orderByClause.Property = clause;
+                orderByClause.Direction = OrderDirection.Ascending; // Direction par défaut
+            }
+            
+            orderByClauses.Add(orderByClause);
         }
     }
 

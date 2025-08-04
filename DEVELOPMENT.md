@@ -12,6 +12,35 @@
 - **Métriques de performance** en temps réel (temps d'exécution, taux de cache hit)
 - **Heuristiques adaptatives** pour A* basées sur les propriétés des nœuds
 
+### ✅ Pagination Intelligente avec Curseurs (v1.8)
+
+#### Fonctionnalités Implémentées
+
+**1. Gestionnaire de pagination intelligente (`IntelligentPagination.cs`)**
+- **Curseurs encodés** en base64 pour la navigation sans perte de position
+- **Filtrage intelligent** avec support des opérateurs de comparaison (>, <, >=, <=)
+- **Tri avancé** avec clauses ORDER BY multiples
+- **Métriques complètes** : nombre total d'éléments, pages, position actuelle
+- **Cache intégré** avec invalidation automatique lors des modifications
+
+**2. Commandes de pagination**
+```gqls
+# Pagination simple
+paginate person limit 10;
+paginate edges limit 20;
+
+# Pagination avec conditions
+cursor person where age > 25 limit 15;
+cursor company where industry = tech limit 10;
+
+# Pagination avec tri
+paginate person order by age desc limit 10;
+cursor person order by name asc limit 5;
+
+# Navigation avec curseur
+cursor person with cursor ABC123 limit 10;
+```
+
 **2. Algorithmes de recherche de chemin**
 ```gqls
 # Optimisation automatique (sélection intelligente)
