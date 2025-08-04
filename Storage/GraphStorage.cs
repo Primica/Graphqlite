@@ -12,6 +12,7 @@ public class GraphStorage
     private readonly string _filePath;
     private readonly Dictionary<Guid, Node> _nodes;
     private readonly Dictionary<Guid, Edge> _edges;
+    private readonly IndexManager _indexManager;
     private readonly object _lockObject = new();
 
     // Signature du fichier binaire pour validation
@@ -23,6 +24,7 @@ public class GraphStorage
         _filePath = filePath;
         _nodes = new Dictionary<Guid, Node>();
         _edges = new Dictionary<Guid, Edge>();
+        _indexManager = new IndexManager();
     }
 
     /// <summary>
@@ -74,6 +76,9 @@ public class GraphStorage
                     var edge = ReadEdge(reader);
                     _edges[edge.Id] = edge;
                 }
+
+                // Reconstruire les index après chargement
+                _indexManager.RebuildIndexes(_nodes.Values);
 
                 return Task.FromResult(new LoadResult 
                 { 
@@ -301,6 +306,7 @@ public class GraphStorage
         lock (_lockObject)
         {
             _nodes[node.Id] = node;
+            _indexManager.IndexNode(node);
         }
     }
 
@@ -398,18 +404,26 @@ public class GraphStorage
     {
         lock (_lockObject)
         {
-            // Supprimer toutes les arêtes connectées
-            var connectedEdges = _edges.Values
-                .Where(e => e.FromNodeId == nodeId || e.ToNodeId == nodeId)
-                .ToList();
-
-            foreach (var edge in connectedEdges)
+            if (_nodes.TryGetValue(nodeId, out var node))
             {
-                _edges.Remove(edge.Id);
-            }
+                // Supprimer le nœud des index
+                _indexManager.RemoveNodeFromIndexes(node);
 
-            // Supprimer le nœud
-            return _nodes.Remove(nodeId);
+                // Supprimer toutes les arêtes connectées
+                var connectedEdges = _edges.Values
+                    .Where(e => e.FromNodeId == nodeId || e.ToNodeId == nodeId)
+                    .ToList();
+
+                foreach (var edge in connectedEdges)
+                {
+                    _edges.Remove(edge.Id);
+                }
+
+                // Supprimer le nœud
+                _nodes.Remove(nodeId);
+                return true;
+            }
+            return false;
         }
     }
 
@@ -422,6 +436,87 @@ public class GraphStorage
         {
             return _edges.Remove(edgeId);
         }
+    }
+
+    /// <summary>
+    /// Recherche des nœuds par propriété indexée
+    /// </summary>
+    public List<Node> FindNodesByIndexedProperty(string label, string propertyName, object value)
+    {
+        lock (_lockObject)
+        {
+            var nodeIds = _indexManager.FindNodesByProperty(label, propertyName, value);
+            return nodeIds.Select(id => _nodes[id]).ToList();
+        }
+    }
+
+    /// <summary>
+    /// Recherche des nœuds par propriété avec plage de valeurs
+    /// </summary>
+    public List<Node> FindNodesByIndexedPropertyRange(string label, string propertyName, object minValue, object maxValue)
+    {
+        lock (_lockObject)
+        {
+            var nodeIds = _indexManager.FindNodesByPropertyRange(label, propertyName, minValue, maxValue);
+            return nodeIds.Select(id => _nodes[id]).ToList();
+        }
+    }
+
+    /// <summary>
+    /// Met à jour un nœud et ses index
+    /// </summary>
+    public bool UpdateNode(Guid nodeId, Dictionary<string, object> newProperties)
+    {
+        lock (_lockObject)
+        {
+            if (_nodes.TryGetValue(nodeId, out var node))
+            {
+                var oldProperties = new Dictionary<string, object>(node.Properties);
+                
+                // Mettre à jour les propriétés
+                foreach (var property in newProperties)
+                {
+                    node.SetProperty(property.Key, property.Value);
+                }
+                
+                // Mettre à jour les index
+                _indexManager.UpdateNodeIndex(node, oldProperties);
+                return true;
+            }
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Obtient les statistiques des index
+    /// </summary>
+    public IndexStats GetIndexStats()
+    {
+        return _indexManager.GetIndexStats();
+    }
+
+    /// <summary>
+    /// Obtient les propriétés indexées automatiquement
+    /// </summary>
+    public HashSet<string> GetAutoIndexProperties()
+    {
+        return _indexManager.GetAutoIndexProperties();
+    }
+
+    /// <summary>
+    /// Ajoute une propriété à l'index automatique
+    /// </summary>
+    public void AddAutoIndexProperty(string propertyName)
+    {
+        _indexManager.AddAutoIndexProperty(propertyName);
+    }
+
+    /// <summary>
+    /// Supprime une propriété de l'index automatique
+    /// </summary>
+    public void RemoveAutoIndexProperty(string propertyName)
+    {
+        _indexManager.RemoveAutoIndexProperty(propertyName);
     }
 
     /// <summary>

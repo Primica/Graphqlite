@@ -212,7 +212,11 @@ public enum QueryType
     GroupBy,
     OrderBy,
     Having,
-    WindowFunction
+    WindowFunction,
+    ShowIndexedProperties,
+    ShowIndexStats,
+    AddIndexProperty,
+    RemoveIndexProperty
 }
 
 /// <summary>

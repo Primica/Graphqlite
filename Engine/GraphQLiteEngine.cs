@@ -96,6 +96,10 @@ public class GraphQLiteEngine : IDisposable
             QueryType.Having => ExecuteHavingAsync(query),
             QueryType.WindowFunction => ExecuteWindowFunctionAsync(query),
             QueryType.ShowSchema => ShowSchemaAsync(),
+            QueryType.ShowIndexedProperties => ShowIndexedPropertiesAsync(),
+            QueryType.ShowIndexStats => ShowIndexStatsAsync(),
+            QueryType.AddIndexProperty => AddIndexPropertyAsync(query),
+            QueryType.RemoveIndexProperty => RemoveIndexPropertyAsync(query),
             _ => throw new NotSupportedException($"Type de requête non supporté : {query.Type}")
         };
     }
@@ -4703,6 +4707,130 @@ public class GraphQLiteEngine : IDisposable
         }
         
         return node.Properties.GetValueOrDefault(clause.Property);
+    }
+
+    /// <summary>
+    /// Affiche les propriétés indexées automatiquement
+    /// </summary>
+    private async Task<QueryResult> ShowIndexedPropertiesAsync()
+    {
+        try
+        {
+            var indexedProperties = _storage.GetAutoIndexProperties();
+            return new QueryResult
+            {
+                Success = true,
+                Message = "Propriétés indexées automatiquement",
+                Data = indexedProperties
+            };
+        }
+        catch (Exception ex)
+        {
+            return new QueryResult
+            {
+                Success = false,
+                Error = $"Erreur lors de l'affichage des propriétés indexées : {ex.Message}"
+            };
+        }
+    }
+
+    /// <summary>
+    /// Affiche les statistiques des index
+    /// </summary>
+    private async Task<QueryResult> ShowIndexStatsAsync()
+    {
+        try
+        {
+            var indexStats = _storage.GetIndexStats();
+            return new QueryResult
+            {
+                Success = true,
+                Message = "Statistiques des index",
+                Data = indexStats
+            };
+        }
+        catch (Exception ex)
+        {
+            return new QueryResult
+            {
+                Success = false,
+                Error = $"Erreur lors de l'affichage des statistiques d'index : {ex.Message}"
+            };
+        }
+    }
+
+    /// <summary>
+    /// Ajoute une propriété à l'index automatique
+    /// </summary>
+    private async Task<QueryResult> AddIndexPropertyAsync(ParsedQuery query)
+    {
+        try
+        {
+            if (query.Properties.TryGetValue("property_name", out var propertyNameObj))
+            {
+                var propertyName = propertyNameObj.ToString() ?? "";
+                _storage.AddAutoIndexProperty(propertyName);
+                
+                return new QueryResult
+                {
+                    Success = true,
+                    Message = $"Propriété '{propertyName}' ajoutée à l'index automatique"
+                };
+            }
+            else
+            {
+                return new QueryResult
+                {
+                    Success = false,
+                    Error = "Nom de propriété manquant dans la commande"
+                };
+            }
+        }
+        catch (Exception ex)
+        {
+            return new QueryResult
+            {
+                Success = false,
+                Error = $"Erreur lors de l'ajout de la propriété à l'index : {ex.Message}"
+            };
+        }
+    }
+
+    /// <summary>
+    /// Supprime une propriété de l'index automatique
+    /// </summary>
+    private async Task<QueryResult> RemoveIndexPropertyAsync(ParsedQuery query)
+    {
+        try
+        {
+            if (query.Properties.TryGetValue("property_name", out var propertyNameObj))
+            {
+                var propertyName = propertyNameObj.ToString() ?? "";
+                _storage.RemoveAutoIndexProperty(propertyName);
+                
+                return new QueryResult
+                {
+                    Success = true,
+                    Message = $"Propriété '{propertyName}' supprimée de l'index automatique"
+                };
+            }
+            else
+            {
+                return new QueryResult
+                {
+                    Success = false,
+                    Error = "Nom de propriété manquant dans la commande"
+                };
+            }
+        }
+        catch (Exception ex)
+        {
+            return new QueryResult
+            {
+                Success = false,
+                Error = $"Erreur lors de la suppression de la propriété de l'index : {ex.Message}"
+            };
+        }
     }
 }
 /// <summary>

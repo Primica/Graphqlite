@@ -523,7 +523,7 @@ dotnet run -- --db production --script migration
 - **Analyse de données** avec agrégations et filtres complexes
 - **Relations complexes** avec jointures virtuelles et sous-requêtes
 
-## 🚀 Fonctionnalités récemment implémentées (v1.4)
+## 🚀 Fonctionnalités récemment implémentées (v1.6)
 
 ### **Jointures virtuelles** ✅
 - Support complet des jointures via type d'arête : `join persons with projects via works_on`
@@ -561,6 +561,14 @@ dotnet run -- --db production --script migration
 - Variables dans les agrégations et chemins
 - Réutilisabilité maximale des scripts
 
+### **Système d'indexation** ✅
+- Index automatique sur les propriétés fréquemment utilisées (`name`, `department`, `role`, `salary`, `age`, `industry`, `status`, `location`, `city`)
+- Commandes de gestion : `show indexed properties`, `show index stats`, `add index property`, `remove index property`
+- Recherche optimisée O(1) au lieu de O(n) pour les propriétés indexées
+- Mise à jour automatique des index lors des opérations CRUD
+- Thread-safe avec structures de données concurrentes
+- Reconstruction automatique des index lors du chargement de la base
+
 ---
 
 ## 📝 Roadmap et extensions possibles
@@ -572,7 +580,7 @@ dotnet run -- --db production --script migration
 - **Fonctions de fenêtre** : `ROW_NUMBER()`, `RANK()`, `DENSE_RANK()` ✅
 
 ### Optimisations de performance
-- **Indexation** : Index sur les propriétés fréquemment utilisées
+- **Indexation** : Index sur les propriétés fréquemment utilisées ✅
 - **Cache de requêtes** : Mise en cache des résultats fréquents
 - **Optimisation des algorithmes de graphe** : Dijkstra, A*, Floyd-Warshall
 - **Pagination intelligente** : Pagination avec curseurs
@@ -607,4 +615,4 @@ Projet open source conçu pour simplifier l'usage des bases de données orienté
 
 **GraphQLite** - Parce que les graphes ne devraient pas être compliqués.
 
-**Version actuelle** : v1.6 - Système 100% fonctionnel avec jointures virtuelles, sous-requêtes complexes, groupement et tri, fonctions de fenêtre, et toutes les fonctionnalités avancées opérationnelles
+**Version actuelle** : v1.6 - Système 100% fonctionnel avec jointures virtuelles, sous-requêtes complexes, groupement et tri, fonctions de fenêtre, système d'indexation, et toutes les fonctionnalités avancées opérationnelles

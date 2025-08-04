@@ -80,7 +80,10 @@ public class NaturalLanguageParser
         { "last_value", QueryType.WindowFunction },
         { "lastvalue", QueryType.WindowFunction },
         { "nth_value", QueryType.WindowFunction },
-        { "nthvalue", QueryType.WindowFunction }
+        { "nthvalue", QueryType.WindowFunction },
+        { "indexed", QueryType.ShowIndexedProperties },
+        { "index", QueryType.ShowIndexedProperties },
+        { "stats", QueryType.ShowIndexStats }
     };
 
     /// <summary>
@@ -98,6 +101,24 @@ public class NaturalLanguageParser
         var queryForTypeDetection = originalQuery.ToLowerInvariant();
         var parsedQuery = new ParsedQuery();
         parsedQuery.Type = DetermineQueryType(queryForTypeDetection);
+
+        // Traitement spécial pour les commandes d'indexation
+        if (queryForTypeDetection.Contains("show indexed properties") || queryForTypeDetection.Contains("show index"))
+        {
+            parsedQuery.Type = QueryType.ShowIndexedProperties;
+        }
+        else if (queryForTypeDetection.Contains("show index stats") || queryForTypeDetection.Contains("index stats"))
+        {
+            parsedQuery.Type = QueryType.ShowIndexStats;
+        }
+        else if (queryForTypeDetection.StartsWith("add index property"))
+        {
+            parsedQuery.Type = QueryType.AddIndexProperty;
+        }
+        else if (queryForTypeDetection.StartsWith("remove index property"))
+        {
+            parsedQuery.Type = QueryType.RemoveIndexProperty;
+        }
 
         // Pour les définitions de variables, utiliser la chaîne originale
         var queryForParsing = parsedQuery.Type == QueryType.DefineVariable ? originalQuery : ConvertToLowerPreservingVariables(originalQuery);
@@ -166,6 +187,18 @@ public class NaturalLanguageParser
                 break;
             case QueryType.ShowSchema:
                 // Pour les commandes de schéma, aucune autre information n'est nécessaire
+                break;
+            case QueryType.ShowIndexedProperties:
+                ParseShowIndexedProperties(queryForParsing, parsedQuery);
+                break;
+            case QueryType.ShowIndexStats:
+                ParseShowIndexStats(queryForParsing, parsedQuery);
+                break;
+            case QueryType.AddIndexProperty:
+                ParseAddIndexProperty(queryForParsing, parsedQuery);
+                break;
+            case QueryType.RemoveIndexProperty:
+                ParseRemoveIndexProperty(queryForParsing, parsedQuery);
                 break;
             default:
                 throw new NotSupportedException($"Type de requête non reconnu dans : {query}");
@@ -1276,22 +1309,31 @@ public class NaturalLanguageParser
 
     private void ParseUpdateNode(string query, ParsedQuery parsedQuery)
     {
-        // Pattern : "update [label] set [properties] where [conditions]"
-        var match = Regex.Match(query, @"update\s+(\w+)\s+set\s+(.+?)\s+where\s+(.+)", RegexOptions.IgnoreCase);
+        // Patterns multiples pour supporter différents formats de mise à jour
+        var patterns = new[]
+        {
+            // Pattern 1 : "update [label] set [properties] where [conditions]"
+            @"update\s+(\w+)\s+set\s+(.+?)\s+where\s+(.+)",
+            // Pattern 2 : "update [label] with [properties] where [conditions]"
+            @"update\s+(\w+)\s+with\s+(.+?)\s+where\s+(.+)"
+        };
+
+        foreach (var pattern in patterns)
+        {
+            var match = Regex.Match(query, pattern, RegexOptions.IgnoreCase);
+            if (match.Success)
+            {
+                parsedQuery.NodeLabel = match.Groups[1].Value;
+                var propertiesText = match.Groups[2].Value.Trim();
+                var conditionsText = match.Groups[3].Value.Trim();
+                
+                ParseDynamicProperties(propertiesText, parsedQuery.Properties);
+                ParseConditionsWithSubQueries(conditionsText, parsedQuery.Conditions, parsedQuery);
+                return;
+            }
+        }
         
-        if (match.Success)
-        {
-            parsedQuery.NodeLabel = match.Groups[1].Value;
-            var propertiesText = match.Groups[2].Value.Trim();
-            var conditionsText = match.Groups[3].Value.Trim();
-            
-            ParseDynamicProperties(propertiesText, parsedQuery.Properties);
-            ParseConditionsWithSubQueries(conditionsText, parsedQuery.Conditions, parsedQuery);
-        }
-        else
-        {
-            throw new ArgumentException($"Format de mise à jour invalide : {query}");
-        }
+        throw new ArgumentException($"Format de mise à jour invalide : {query}");
     }
 
     private void ParseUpdateEdge(string query, ParsedQuery parsedQuery)
@@ -4305,6 +4347,74 @@ public class NaturalLanguageParser
         else
         {
             throw new ArgumentException($"Format de fonction de fenêtre non reconnu : {query}");
+        }
+    }
+
+    /// <summary>
+    /// Parse les commandes d'affichage des propriétés indexées
+    /// Exemples :
+    /// - show indexed properties
+    /// - show index
+    /// </summary>
+    private void ParseShowIndexedProperties(string query, ParsedQuery parsedQuery)
+    {
+        // Cette commande ne nécessite pas de parsing supplémentaire
+        // Elle affiche simplement les propriétés indexées automatiquement
+    }
+
+    /// <summary>
+    /// Parse les commandes d'affichage des statistiques d'index
+    /// Exemples :
+    /// - show index stats
+    /// - index stats
+    /// </summary>
+    private void ParseShowIndexStats(string query, ParsedQuery parsedQuery)
+    {
+        // Cette commande ne nécessite pas de parsing supplémentaire
+        // Elle affiche simplement les statistiques des index
+    }
+
+    /// <summary>
+    /// Parse les commandes d'ajout de propriété à l'index
+    /// Exemples :
+    /// - add index property "experience"
+    /// - add index property experience
+    /// </summary>
+    private void ParseAddIndexProperty(string query, ParsedQuery parsedQuery)
+    {
+        var pattern = @"add\s+index\s+property\s+[""]?([^""\s]+)[""]?";
+        var match = Regex.Match(query, pattern, RegexOptions.IgnoreCase);
+        
+        if (match.Success)
+        {
+            var propertyName = match.Groups[1].Value.Trim();
+            parsedQuery.Properties["property_name"] = propertyName;
+        }
+        else
+        {
+            throw new ArgumentException($"Format de commande d'ajout d'index non reconnu : {query}");
+        }
+    }
+
+    /// <summary>
+    /// Parse les commandes de suppression de propriété de l'index
+    /// Exemples :
+    /// - remove index property "city"
+    /// - remove index property city
+    /// </summary>
+    private void ParseRemoveIndexProperty(string query, ParsedQuery parsedQuery)
+    {
+        var pattern = @"remove\s+index\s+property\s+[""]?([^""\s]+)[""]?";
+        var match = Regex.Match(query, pattern, RegexOptions.IgnoreCase);
+        
+        if (match.Success)
+        {
+            var propertyName = match.Groups[1].Value.Trim();
+            parsedQuery.Properties["property_name"] = propertyName;
+        }
+        else
+        {
+            throw new ArgumentException($"Format de commande de suppression d'index non reconnu : {query}");
         }
     }
 }
