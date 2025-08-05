@@ -1,189 +1,97 @@
-﻿using GraphQLite.Engine;
+﻿using System.CommandLine;
+using GraphQLite.Engine;
 
 namespace GraphQLite;
 
 class Program
 {
-    static async Task Main(string[] args)
+    static async Task<int> Main(string[] args)
     {
-        Console.WriteLine("GraphQLite - Base de données orientée graphe");
-        Console.WriteLine("DSL en langage naturel");
-        Console.WriteLine();
-
-        // Analyser les arguments de ligne de commande
-        string dbPath = ParseCommandLineArgs(args);
-
-        using var engine = new GraphQLiteEngine(dbPath);
-        
-        try
+        var databaseOption = new Option<string>(
+            aliases: new[] { "--database", "--db", "-d" },
+            description: "Spécifie le fichier de base de données à utiliser")
         {
-            var loadResult = await engine.InitializeAsync();
-            
-            if (loadResult.Success)
-            {
-                Console.WriteLine($"Fichier : {dbPath}");
-                Console.WriteLine(loadResult.Message);
-                
-                if (!loadResult.IsNewDatabase)
-                {
-                    Console.WriteLine($"Données existantes chargées avec succès.");
-                }
-            }
-            else
-            {
-                Console.WriteLine($"Erreur d'initialisation : {loadResult.Message}");
-                return;
-            }
-        }
-        catch (Exception ex)
+            IsRequired = false
+        };
+
+        var scriptOption = new Option<string>(
+            aliases: new[] { "--script", "-s" },
+            description: "Exécute un script de commandes GraphQLite")
         {
-            Console.WriteLine($"Erreur d'initialisation : {ex.Message}");
+            IsRequired = false
+        };
+
+        var interactiveOption = new Option<bool>(
+            aliases: new[] { "--interactive", "-i" },
+            description: "Mode interactif avec autocomplétion")
+        {
+            IsRequired = false
+        };
+
+        var rootCommand = new RootCommand("GraphQLite - Base de données orientée graphe avec DSL en langage naturel")
+        {
+            databaseOption,
+            scriptOption,
+            interactiveOption
+        };
+
+        rootCommand.SetHandler(async (database, script, interactive) =>
+        {
+            await HandleCommand(database, script, interactive);
+        }, databaseOption, scriptOption, interactiveOption);
+
+        return await rootCommand.InvokeAsync(args);
+    }
+
+    static async Task HandleCommand(string? database, string? script, bool interactive)
+    {
+        // Déterminer le chemin de la base de données
+        string dbPath = DetermineDatabasePath(database, script);
+
+        // Si un script est spécifié, l'exécuter et quitter
+        if (!string.IsNullOrEmpty(script))
+        {
+            await ExecuteScriptAndExit(dbPath, script);
             return;
         }
 
-        Console.WriteLine("\nGraphQLite est prêt. Tapez 'help' pour voir les commandes ou 'exit' pour quitter.");
-        
-        while (true)
+        // Mode interactif avec autocomplétion
+        if (interactive || string.IsNullOrEmpty(script))
         {
-            Console.Write("\nGraphQLite> ");
-            var input = Console.ReadLine();
-
-            if (string.IsNullOrWhiteSpace(input))
-                continue;
-
-            if (input.Trim().ToLowerInvariant() is "exit" or "quit" or "q")
-            {
-                Console.WriteLine("Au revoir !");
-                break;
-            }
-
-            if (input.Trim().ToLowerInvariant() == "help")
-            {
-                ShowExamples();
-                continue;
-            }
-
-            if (input.Trim().ToLowerInvariant() == "variables")
-            {
-                ShowVariables(engine);
-                continue;
-            }
-
-            if (input.Trim().ToLowerInvariant() == "clear-variables")
-            {
-                engine.ClearVariables();
-                Console.WriteLine("Toutes les variables ont été supprimées.");
-                continue;
-            }
-
-            // Exécuter la requête
-            try
-            {
-                var result = await engine.ExecuteQueryAsync(input);
-                DisplayResult(result);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Erreur : {ex.Message}");
-            }
+            await RunInteractiveMode(dbPath);
         }
     }
 
-    static string ParseCommandLineArgs(string[] args)
+    static string DetermineDatabasePath(string? database, string? script)
     {
-        string? dbPath = null;
-        string? scriptPath = null;
-
-        for (int i = 0; i < args.Length; i++)
+        if (!string.IsNullOrEmpty(database))
         {
-            switch (args[i].ToLowerInvariant())
+            var providedPath = database;
+            
+            // Si le chemin ne contient pas d'extension, ajouter .gqlite
+            if (!Path.HasExtension(providedPath))
             {
-                case "--db":
-                case "-d":
-                    if (i + 1 < args.Length)
-                    {
-                        var providedPath = args[i + 1];
-                        
-                        // Si le chemin ne contient pas d'extension, ajouter .gqlite
-                        if (!Path.HasExtension(providedPath))
-                        {
-                            providedPath += ".gqlite";
-                        }
-                        
-                        // Si le chemin n'est pas absolu, le rendre relatif au répertoire courant
-                        if (!Path.IsPathRooted(providedPath))
-                        {
-                            dbPath = Path.Combine(Environment.CurrentDirectory, providedPath);
-                        }
-                        else
-                        {
-                            dbPath = providedPath;
-                        }
-                        
-                        i++; // Ignorer le prochain argument car c'est la valeur
-                    }
-                    else
-                    {
-                        Console.WriteLine("Erreur : --db/-d nécessite un nom de fichier");
-                        Environment.Exit(1);
-                    }
-                    break;
-
-                case "--script":
-                case "-s":
-                    if (i + 1 < args.Length)
-                    {
-                        scriptPath = args[i + 1];
-                        
-                        // Ajouter extension .gqls si absente
-                        if (!Path.HasExtension(scriptPath))
-                        {
-                            scriptPath += ".gqls";
-                        }
-                        
-                        if (!Path.IsPathRooted(scriptPath))
-                        {
-                            scriptPath = Path.Combine(Environment.CurrentDirectory, scriptPath);
-                        }
-
-                        i++; // Ignorer le prochain argument car c'est la valeur
-                    }
-                    else
-                    {
-                        Console.WriteLine("Erreur : --script/-s nécessite un nom de fichier");
-                        Environment.Exit(1);
-                    }
-                    break;
-                    
-                case "--help":
-                case "-h":
-                    ShowUsage();
-                    Environment.Exit(0);
-                    break;
-                    
-                default:
-                    Console.WriteLine($"Argument inconnu : {args[i]}");
-                    ShowUsage();
-                    Environment.Exit(1);
-                    break;
-            }
-        }
-
-        // Si un script est spécifié, l'exécuter
-        if (!string.IsNullOrEmpty(scriptPath))
-        {
-            // Si aucune DB n'est spécifiée, créer une DB avec le nom du script
-            if (string.IsNullOrEmpty(dbPath))
-            {
-                var scriptFileName = Path.GetFileNameWithoutExtension(scriptPath);
-                dbPath = Path.Combine(Environment.CurrentDirectory, $"{scriptFileName}.gqlite");
+                providedPath += ".gqlite";
             }
             
-            ExecuteScriptAndExit(dbPath, scriptPath).Wait();
+            // Si le chemin n'est pas absolu, le rendre relatif au répertoire courant
+            if (!Path.IsPathRooted(providedPath))
+            {
+                return Path.Combine(Environment.CurrentDirectory, providedPath);
+            }
+            
+            return providedPath;
         }
 
-        // Si aucune DB n'est spécifiée et pas de script, utiliser la DB par défaut
-        return dbPath ?? Path.Combine(Environment.CurrentDirectory, "graphqlite.gqlite");
+        // Si un script est spécifié sans DB, créer une DB avec le nom du script
+        if (!string.IsNullOrEmpty(script))
+        {
+            var scriptFileName = Path.GetFileNameWithoutExtension(script);
+            return Path.Combine(Environment.CurrentDirectory, $"{scriptFileName}.gqlite");
+        }
+
+        // DB par défaut
+        return Path.Combine(Environment.CurrentDirectory, "graphqlite.gqlite");
     }
 
     static async Task ExecuteScriptAndExit(string dbPath, string scriptPath)
@@ -246,43 +154,499 @@ class Program
         }
     }
 
-    static void ShowUsage()
+    static async Task RunInteractiveMode(string dbPath)
     {
-        Console.WriteLine("Usage : GraphQLite [options]");
+        Console.WriteLine("GraphQLite - Base de données orientée graphe");
+        Console.WriteLine("DSL en langage naturel avec autocomplétion");
         Console.WriteLine();
-        Console.WriteLine("Options :");
-        Console.WriteLine("  --db, -d <fichier>      Spécifie le fichier de base de données à utiliser");
-        Console.WriteLine("                          (extension .gqlite ajoutée automatiquement si absente)");
-        Console.WriteLine("  --script, -s <fichier>  Exécute un script de commandes GraphQLite");
-        Console.WriteLine("                          (extension .gqls ajoutée automatiquement si absente)");
-        Console.WriteLine("                          Si aucune DB n'est spécifiée, crée <script>.gqlite");
-        Console.WriteLine("  --help, -h              Affiche cette aide");
-        Console.WriteLine();
-        Console.WriteLine("Exemples :");
-        Console.WriteLine("  GraphQLite                        # Mode interactif avec graphqlite.gqlite");
-        Console.WriteLine("  GraphQLite --db mydb              # Mode interactif avec mydb.gqlite");
-        Console.WriteLine("  GraphQLite --script example       # Exécute example.gqls -> example.gqlite");
-        Console.WriteLine("  GraphQLite --script setup         # Exécute setup.gqls -> setup.gqlite");
-        Console.WriteLine("  GraphQLite --db prod --script init # Exécute init.gqls -> prod.gqlite");
-        Console.WriteLine("  GraphQLite -s /path/to/script      # Exécute le script à cet emplacement");
+
+        using var engine = new GraphQLiteEngine(dbPath);
+        
+        try
+        {
+            var loadResult = await engine.InitializeAsync();
+            
+            if (loadResult.Success)
+            {
+                Console.WriteLine($"Fichier : {dbPath}");
+                Console.WriteLine(loadResult.Message);
+                
+                if (!loadResult.IsNewDatabase)
+                {
+                    Console.WriteLine($"Données existantes chargées avec succès.");
+                }
+            }
+            else
+            {
+                Console.WriteLine($"Erreur d'initialisation : {loadResult.Message}");
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Erreur d'initialisation : {ex.Message}");
+            return;
+        }
+
+        Console.WriteLine("\nGraphQLite est prêt. Tapez 'help' pour voir les commandes ou 'exit' pour quitter.");
+        Console.WriteLine("Utilisez Tab pour l'autocomplétion et ↑↓ pour naviguer dans l'historique.");
+        
+        var cli = new InteractiveCLI(engine);
+        await cli.RunAsync();
+    }
+}
+
+public class InteractiveCLI
+{
+    private readonly GraphQLiteEngine _engine;
+    private readonly List<string> _commandHistory = new();
+    private int _historyIndex = -1;
+    private readonly Dictionary<string, string[]> _completions = new();
+
+    public InteractiveCLI(GraphQLiteEngine engine)
+    {
+        _engine = engine;
+        InitializeCompletions();
     }
 
-    static void ShowExamples()
+    private void InitializeCompletions()
     {
-        Console.WriteLine("\nCommandes disponibles :");
+        _completions["commands"] = new[]
+        {
+            "create", "find", "update", "delete", "connect", "count", "show", "help", "exit", "quit",
+            "variables", "clear-variables", "paginate", "cursor", "sum", "avg", "min", "max",
+            "group", "order", "sort", "join", "merge", "optimize", "calculate", "floyd", "dijkstra", "astar"
+        };
+
+        _completions["node_types"] = new[]
+        {
+            "person", "persons", "company", "companies", "product", "products", "project", "projects",
+            "user", "users", "employee", "employees", "customer", "customers", "order", "orders"
+        };
+
+        _completions["edge_types"] = new[]
+        {
+            "works_for", "knows", "manages", "reports_to", "supervises", "collaborates", "owns",
+            "belongs_to", "participates", "contributes", "sponsors", "produces", "uses", "buys"
+        };
+
+        _completions["properties"] = new[]
+        {
+            "name", "age", "salary", "role", "department", "industry", "employees", "price",
+            "status", "location", "city", "country", "email", "phone", "website", "budget"
+        };
+
+        _completions["operators"] = new[]
+        {
+            "=", ">", "<", ">=", "<=", "!=", "and", "or", "in", "not in", "exists", "not exists"
+        };
+
+        _completions["functions"] = new[]
+        {
+            "sum", "avg", "min", "max", "count", "row_number", "rank", "dense_rank", "percent_rank",
+            "ntile", "lead", "lag", "first_value", "last_value", "nth_value"
+        };
+
+        _completions["keywords"] = new[]
+        {
+            "with", "where", "and", "or", "limit", "offset", "order", "by", "group", "having",
+            "from", "to", "via", "avoiding", "within", "steps", "over", "connected", "reachable",
+            "neighbors", "adjacent", "path", "shortest", "bidirectional", "all", "any", "exists",
+            "not", "in", "as", "variable", "define", "set", "update", "delete", "remove"
+        };
+    }
+
+    public async Task RunAsync()
+    {
+        while (true)
+        {
+            Console.Write("\nGraphQLite> ");
+            
+            var input = await ReadLineWithCompletionAsync();
+            
+            // Si l'entrée est null (fin de flux), sortir
+            if (input == null)
+            {
+                break;
+            }
+            
+            if (string.IsNullOrWhiteSpace(input))
+                continue;
+
+            // Ajouter à l'historique
+            if (!string.IsNullOrWhiteSpace(input))
+            {
+                _commandHistory.Add(input);
+                _historyIndex = _commandHistory.Count;
+            }
+
+            if (input.Trim().ToLowerInvariant() is "exit" or "quit" or "q")
+            {
+                Console.WriteLine("Au revoir !");
+                break;
+            }
+
+            if (input.Trim().ToLowerInvariant() == "help")
+            {
+                ShowHelp();
+                continue;
+            }
+
+            if (input.Trim().ToLowerInvariant() == "variables")
+            {
+                ShowVariables();
+                continue;
+            }
+
+            if (input.Trim().ToLowerInvariant() == "clear-variables")
+            {
+                _engine.ClearVariables();
+                Console.WriteLine("Toutes les variables ont été supprimées.");
+                continue;
+            }
+
+            if (input.Trim().ToLowerInvariant() == "clear")
+            {
+                Console.Clear();
+                continue;
+            }
+
+            if (input.Trim().ToLowerInvariant() == "history")
+            {
+                ShowHistory();
+                continue;
+            }
+
+            // Exécuter la requête
+            try
+            {
+                var result = await _engine.ExecuteQueryAsync(input);
+                DisplayResult(result);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Erreur : {ex.Message}");
+            }
+
+            // Si l'entrée est redirigée, sortir après avoir traité la commande
+            if (Console.IsInputRedirected)
+            {
+                break;
+            }
+        }
+    }
+
+    private async Task<string> ReadLineWithCompletionAsync()
+    {
+        // Vérifier si la console est interactive
+        if (!Console.IsInputRedirected && !Console.IsOutputRedirected)
+        {
+            var input = "";
+            var cursorPosition = 0;
+            var suggestions = new List<string>();
+            var suggestionIndex = -1;
+
+            while (true)
+            {
+                var key = Console.ReadKey(true);
+
+                switch (key.Key)
+                {
+                    case ConsoleKey.Enter:
+                        Console.WriteLine();
+                        return input;
+
+                    case ConsoleKey.Escape:
+                        Console.WriteLine();
+                        return "";
+
+                    case ConsoleKey.Backspace:
+                        if (cursorPosition > 0)
+                        {
+                            input = input.Remove(cursorPosition - 1, 1);
+                            cursorPosition--;
+                            RedrawLine(input, cursorPosition);
+                        }
+                        break;
+
+                    case ConsoleKey.Delete:
+                        if (cursorPosition < input.Length)
+                        {
+                            input = input.Remove(cursorPosition, 1);
+                            RedrawLine(input, cursorPosition);
+                        }
+                        break;
+
+                    case ConsoleKey.LeftArrow:
+                        if (cursorPosition > 0)
+                        {
+                            cursorPosition--;
+                            SetCursorPosition(cursorPosition);
+                        }
+                        break;
+
+                    case ConsoleKey.RightArrow:
+                        if (cursorPosition < input.Length)
+                        {
+                            cursorPosition++;
+                            SetCursorPosition(cursorPosition);
+                        }
+                        break;
+
+                    case ConsoleKey.UpArrow:
+                        if (key.Modifiers.HasFlag(ConsoleModifiers.Control))
+                        {
+                            // Navigation dans l'historique
+                            if (_historyIndex > 0)
+                            {
+                                _historyIndex--;
+                                input = _commandHistory[_historyIndex];
+                                cursorPosition = input.Length;
+                                RedrawLine(input, cursorPosition);
+                            }
+                        }
+                        else if (suggestions.Count > 0)
+                        {
+                            // Navigation dans les suggestions
+                            suggestionIndex = (suggestionIndex - 1 + suggestions.Count) % suggestions.Count;
+                            ShowSuggestions(suggestions, suggestionIndex);
+                        }
+                        break;
+
+                    case ConsoleKey.DownArrow:
+                        if (key.Modifiers.HasFlag(ConsoleModifiers.Control))
+                        {
+                            // Navigation dans l'historique
+                            if (_historyIndex < _commandHistory.Count - 1)
+                            {
+                                _historyIndex++;
+                                input = _commandHistory[_historyIndex];
+                                cursorPosition = input.Length;
+                                RedrawLine(input, cursorPosition);
+                            }
+                        }
+                        else if (suggestions.Count > 0)
+                        {
+                            // Navigation dans les suggestions
+                            suggestionIndex = (suggestionIndex + 1) % suggestions.Count;
+                            ShowSuggestions(suggestions, suggestionIndex);
+                        }
+                        break;
+
+                    case ConsoleKey.Tab:
+                        if (suggestions.Count > 0)
+                        {
+                            // Appliquer la suggestion sélectionnée
+                            var selectedSuggestion = suggestions[suggestionIndex >= 0 ? suggestionIndex : 0];
+                            var lastWord = GetLastWord(input, cursorPosition);
+                            
+                            // Vérifier que la suggestion commence bien par le dernier mot
+                            if (selectedSuggestion.ToLowerInvariant().StartsWith(lastWord.ToLowerInvariant()))
+                            {
+                                var replacement = selectedSuggestion.Substring(Math.Min(lastWord.Length, selectedSuggestion.Length));
+                                
+                                input = input.Insert(cursorPosition, replacement);
+                                cursorPosition += replacement.Length;
+                                RedrawLine(input, cursorPosition);
+                            }
+                        }
+                        else
+                        {
+                            // Générer les suggestions
+                            suggestions = GenerateSuggestions(input, cursorPosition);
+                            if (suggestions.Count > 0)
+                            {
+                                suggestionIndex = 0;
+                                ShowSuggestions(suggestions, suggestionIndex);
+                            }
+                        }
+                        break;
+
+                    default:
+                        if (key.KeyChar >= 32 && key.KeyChar <= 126)
+                        {
+                            input = input.Insert(cursorPosition, key.KeyChar.ToString());
+                            cursorPosition++;
+                            RedrawLine(input, cursorPosition);
+                        }
+                        break;
+                }
+            }
+        }
+        else
+        {
+            // Mode non-interactif (redirection d'entrée)
+            var input = Console.ReadLine();
+            return input; // Retourner null si fin de flux
+        }
+    }
+
+    private void RedrawLine(string input, int cursorPosition)
+    {
+        var currentLine = Console.CursorTop;
+        Console.SetCursorPosition(0, currentLine);
+        Console.Write("GraphQLite> " + input);
+        Console.Write(new string(' ', Console.WindowWidth - Console.CursorLeft));
+        SetCursorPosition(cursorPosition);
+    }
+
+    private void SetCursorPosition(int position)
+    {
+        Console.SetCursorPosition("GraphQLite> ".Length + position, Console.CursorTop);
+    }
+
+    private string GetLastWord(string input, int cursorPosition)
+    {
+        var beforeCursor = input.Substring(0, cursorPosition);
+        var words = beforeCursor.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return words.Length > 0 ? words[words.Length - 1] : "";
+    }
+
+    private List<string> GenerateSuggestions(string input, int cursorPosition)
+    {
+        var suggestions = new List<string>();
+        var beforeCursor = input.Substring(0, cursorPosition);
+        var lastWord = GetLastWord(input, cursorPosition).ToLowerInvariant();
+
+        if (string.IsNullOrEmpty(lastWord))
+            return suggestions;
+
+        // Suggestions basées sur le contexte
+        foreach (var completion in _completions)
+        {
+            foreach (var item in completion.Value)
+            {
+                if (item.ToLowerInvariant().StartsWith(lastWord))
+                {
+                    suggestions.Add(item);
+                }
+            }
+        }
+
+        // Suggestions contextuelles basées sur la position dans la commande
+        var words = beforeCursor.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (words.Length == 0)
+        {
+            suggestions.AddRange(_completions["commands"]);
+        }
+        else if (words.Length == 1)
+        {
+            var command = words[0].ToLowerInvariant();
+            switch (command)
+            {
+                case "create":
+                case "find":
+                case "update":
+                case "delete":
+                case "count":
+                    suggestions.AddRange(_completions["node_types"]);
+                    break;
+                case "connect":
+                    suggestions.AddRange(_completions["node_types"]);
+                    break;
+                case "sum":
+                case "avg":
+                case "min":
+                case "max":
+                    suggestions.AddRange(_completions["properties"]);
+                    break;
+            }
+        }
+
+        return suggestions.Distinct().Take(10).ToList();
+    }
+
+    private void ShowSuggestions(List<string> suggestions, int selectedIndex)
+    {
+        if (suggestions.Count == 0) return;
+
+        var currentLine = Console.CursorTop;
+        Console.WriteLine();
+        
+        for (int i = 0; i < suggestions.Count; i++)
+        {
+            if (i == selectedIndex)
+            {
+                Console.BackgroundColor = ConsoleColor.Blue;
+                Console.ForegroundColor = ConsoleColor.White;
+            }
+            else
+            {
+                Console.BackgroundColor = ConsoleColor.Black;
+                Console.ForegroundColor = ConsoleColor.Gray;
+            }
+            
+            Console.WriteLine($"  {suggestions[i]}");
+        }
+        
+        Console.ResetColor();
+        Console.SetCursorPosition(0, currentLine);
+    }
+
+    private void ShowHelp()
+    {
+        Console.WriteLine("\n=== GraphQLite - Aide ===\n");
+        Console.WriteLine("Commandes de base :");
         Console.WriteLine("  create person with name John and age 30");
-        Console.WriteLine("  connect John to Acme with relationship works_at");
         Console.WriteLine("  find all persons where age > 25");
-        Console.WriteLine("  find path from John to Mary");
-        Console.WriteLine("  find persons from John over 2 steps");
+        Console.WriteLine("  connect John to Acme with relationship works_at");
         Console.WriteLine("  update person set age 31 where name John");
         Console.WriteLine("  count persons where age > 18");
         Console.WriteLine("  delete person where name John");
         Console.WriteLine("  show schema");
-        Console.WriteLine("\nTapez 'help' pour revoir ces commandes.");
+        Console.WriteLine("\nCommandes avancées :");
+        Console.WriteLine("  find path from John to Mary");
+        Console.WriteLine("  find persons from John over 2 steps");
+        Console.WriteLine("  sum salary of persons where age > 30");
+        Console.WriteLine("  group persons by city having count > 2");
+        Console.WriteLine("  join persons with companies via works_for");
+        Console.WriteLine("\nCommandes système :");
+        Console.WriteLine("  help          - Afficher cette aide");
+        Console.WriteLine("  variables     - Afficher les variables définies");
+        Console.WriteLine("  clear-variables - Supprimer toutes les variables");
+        Console.WriteLine("  history       - Afficher l'historique des commandes");
+        Console.WriteLine("  clear         - Effacer l'écran");
+        Console.WriteLine("  exit/quit     - Quitter");
+        Console.WriteLine("\nRaccourcis clavier :");
+        Console.WriteLine("  Tab           - Autocomplétion");
+        Console.WriteLine("  ↑↓            - Navigation dans les suggestions");
+        Console.WriteLine("  Ctrl+↑↓       - Navigation dans l'historique");
+        Console.WriteLine("  Échap         - Annuler la saisie");
     }
 
-    static void DisplayResult(QueryResult result)
+    private void ShowVariables()
+    {
+        var variables = _engine.GetVariables();
+        
+        if (variables.Count == 0)
+        {
+            Console.WriteLine("Aucune variable définie.");
+            return;
+        }
+        
+        Console.WriteLine("Variables définies :");
+        foreach (var variable in variables)
+        {
+            Console.WriteLine($"  {variable.Key} = {variable.Value}");
+        }
+    }
+
+    private void ShowHistory()
+    {
+        if (_commandHistory.Count == 0)
+        {
+            Console.WriteLine("Aucune commande dans l'historique.");
+            return;
+        }
+
+        Console.WriteLine("Historique des commandes :");
+        for (int i = 0; i < _commandHistory.Count; i++)
+        {
+            Console.WriteLine($"  {i + 1}: {_commandHistory[i]}");
+        }
+    }
+
+    private void DisplayResult(QueryResult result)
     {
         if (result.Success)
         {
@@ -299,7 +663,7 @@ class Program
         }
     }
 
-    static void DisplayData(object data)
+    private void DisplayData(object data)
     {
         switch (data)
         {
@@ -333,7 +697,7 @@ class Program
         }
     }
 
-    static void DisplaySchema(GraphQLite.Models.DatabaseSchema schema)
+    private void DisplaySchema(GraphQLite.Models.DatabaseSchema schema)
     {
         Console.WriteLine($"\nSchéma généré le {schema.GeneratedAt:yyyy-MM-dd HH:mm:ss}");
         Console.WriteLine($"Total : {schema.TotalNodes} nœuds, {schema.TotalEdges} arêtes\n");
@@ -393,23 +757,6 @@ class Program
         if (!schema.NodeSchemas.Any() && !schema.EdgeSchemas.Any())
         {
             Console.WriteLine("  La base de données est vide. Créez des nœuds et des arêtes pour voir le schéma.");
-        }
-    }
-
-    static void ShowVariables(GraphQLiteEngine engine)
-    {
-        var variables = engine.GetVariables();
-        
-        if (variables.Count == 0)
-        {
-            Console.WriteLine("Aucune variable définie.");
-            return;
-        }
-        
-        Console.WriteLine("Variables définies :");
-        foreach (var variable in variables)
-        {
-            Console.WriteLine($"  {variable.Key} = {variable.Value}");
         }
     }
 }

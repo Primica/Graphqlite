@@ -8,6 +8,7 @@ Une base de données orientée graphe simple avec un DSL en langage naturel, con
 - **Stockage local** : Fichiers `.gqlite` en format binaire optimisé
 - **Architecture modulaire** : Séparation claire entre modèles, stockage, requêtes et moteur
 - **Interface console interactive** : Testez vos requêtes en temps réel
+- **Client CLI moderne avec autocomplétion** : Interface utilisateur avancée avec suggestions contextuelles
 - **Support de scripts** : Exécution de fichiers `.gqls` avec requêtes multi-lignes
 - **Conditions multi-critères** : Support des opérateurs logiques AND/OR
 - **Pagination avancée** : Support LIMIT et OFFSET pour les grandes datasets
@@ -43,6 +44,10 @@ Graphqlite/
 │   └── GraphQLiteEngine.cs  # Moteur principal avec algorithmes de graphe et pagination
 ├── Scripting/
 │   └── ScriptEngine.cs   # Moteur d'exécution de scripts .gqls
+├── scripts/              # Scripts de test et démonstration
+│   ├── demos/           # Scripts de démonstration
+│   ├── tests/           # Scripts de test
+│   └── debug/           # Scripts de debug (si nécessaire)
 └── Program.cs            # Interface CLI avec gestion d'arguments
 ```
 
@@ -65,8 +70,12 @@ dotnet run
 ## 🔧 Options de ligne de commande
 
 ```bash
-# Mode interactif par défaut
+# Mode interactif par défaut avec autocomplétion
 dotnet run
+
+# Mode interactif explicite avec autocomplétion
+dotnet run -- --interactive
+dotnet run -- -i
 
 # Spécifier une base de données
 dotnet run -- --db myproject
@@ -76,12 +85,46 @@ dotnet run -- -d /path/to/database
 dotnet run -- --script myscript
 dotnet run -- -s /path/to/script.gqls
 
+# Exécuter une démonstration
+dotnet run -- --script scripts/demos/demo_cache_intelligent
+
+# Exécuter un test
+dotnet run -- --script scripts/tests/test_simple
+
+# Exécuter le test complet
+dotnet run -- --script scripts/tests/final_comprehensive_test
+
 # Combiner base et script
 dotnet run -- --db production --script init
 
 # Afficher l'aide
 dotnet run -- --help
-```
+
+### Interface CLI moderne avec autocomplétion
+
+Le client CLI GraphQLite offre une expérience utilisateur moderne avec :
+
+#### **Autocomplétion intelligente**
+- **Tab** : Suggestions contextuelles basées sur la position dans la commande
+- **↑↓** : Navigation dans les suggestions
+- **Ctrl+↑↓** : Navigation dans l'historique des commandes
+- **Échap** : Annuler la saisie en cours
+
+#### **Suggestions contextuelles**
+- **Commandes** : `create`, `find`, `update`, `delete`, `connect`, `count`, `show`
+- **Types de nœuds** : `person`, `company`, `product`, `project`, `user`, `employee`
+- **Types d'arêtes** : `works_for`, `knows`, `manages`, `reports_to`, `supervises`
+- **Propriétés** : `name`, `age`, `salary`, `role`, `department`, `industry`
+- **Opérateurs** : `=`, `>`, `<`, `>=`, `<=`, `!=`, `and`, `or`, `in`, `not in`
+- **Fonctions** : `sum`, `avg`, `min`, `max`, `count`, `row_number`, `rank`
+
+#### **Commandes système**
+- `help` : Afficher l'aide détaillée
+- `variables` : Afficher les variables définies
+- `clear-variables` : Supprimer toutes les variables
+- `history` : Afficher l'historique des commandes
+- `clear` : Effacer l'écran
+- `exit/quit` : Quitter l'application
 
 ### Comportement intelligent des scripts
 - **Sans DB spécifiée** : `--script example` crée et utilise `example.gqlite`
@@ -551,6 +594,69 @@ dotnet run -- --db production --script migration
 - **Analyse de données** avec agrégations et filtres complexes
 - **Relations complexes** avec jointures virtuelles et sous-requêtes
 
+## 🚀 Fonctionnalités récemment implémentées (v1.9)
+
+### **Client CLI moderne avec autocomplétion** ✅
+- **Interface utilisateur avancée** : Client CLI basé sur System.CommandLine avec gestion d'erreurs robuste
+- **Autocomplétion intelligente** : Suggestions contextuelles basées sur la position dans la commande
+- **Navigation fluide** : Utilisation des flèches pour naviguer dans les suggestions et l'historique
+- **Historique des commandes** : Sauvegarde automatique et navigation avec Ctrl+↑↓
+- **Suggestions contextuelles** : Commandes, types de nœuds, types d'arêtes, propriétés, opérateurs, fonctions
+- **Commandes système** : `help`, `variables`, `clear-variables`, `history`, `clear`
+- **Gestion robuste** : Support des redirections d'entrée et détection automatique du mode interactif
+
+### **Commandes CLI avancées**
+```bash
+# Mode interactif avec autocomplétion
+dotnet run -- --interactive
+
+# Spécifier une base de données
+dotnet run -- --database myproject
+
+# Exécuter un script
+dotnet run -- --script example
+
+# Afficher l'aide
+dotnet run -- --help
+```
+
+## 📜 Scripts de test et démonstration
+
+Le projet inclut une collection complète de scripts organisés dans le répertoire `scripts/` :
+
+### 🎯 Scripts de démonstration (`scripts/demos/`)
+- `demo_cache_intelligent.gqls` - Démonstration du cache intelligent
+- `demo_indexation.gqls` - Démonstration du système d'indexation
+- `demo_pagination.gqlite` - Démonstration de la pagination
+
+### 🧪 Scripts de test (`scripts/tests/`)
+- Tests de base : `test_simple.gqls`, `test_properties.gqls`
+- Tests de relations : `test_relations_chemins.gqls`, `test_aggregations.gqls`
+- Tests de sous-requêtes : `test_subqueries.gqls`, `test_subqueries_final.gqls`
+- Tests complets : `final_comprehensive_test.gqls`, `comprehensive_test.gqls`
+- Tests spécialisés : `test_cache.gqls`, `test_indexation.gqls`
+
+### 📋 Utilisation des scripts
+```bash
+# Test rapide
+dotnet run -- --script scripts/tests/quick_test
+
+# Démonstration du cache
+dotnet run -- --script scripts/demos/demo_cache_intelligent
+
+# Test complet du système
+dotnet run -- --script scripts/tests/final_comprehensive_test
+```
+
+Pour plus de détails, consultez `scripts/README.md`.
+
+### **Expérience utilisateur améliorée**
+- **Interface moderne** : Prompt clair avec indicateurs visuels
+- **Autocomplétion contextuelle** : Suggestions adaptées au contexte de la commande
+- **Navigation intuitive** : Raccourcis clavier pour une utilisation fluide
+- **Gestion d'erreurs** : Messages d'erreur clairs et informatifs
+- **Mode non-interactif** : Support des redirections d'entrée pour l'automatisation
+
 ## 🚀 Fonctionnalités récemment implémentées (v1.8)
 
 ### **Optimisation intelligente des algorithmes de graphes** ✅
@@ -715,4 +821,4 @@ Projet open source conçu pour simplifier l'usage des bases de données orienté
 
 **GraphQLite** - Parce que les graphes ne devraient pas être compliqués.
 
-**Version actuelle** : v1.7 - Système 100% fonctionnel avec jointures virtuelles, sous-requêtes complexes, groupement et tri, fonctions de fenêtre, système d'indexation, cache intelligent automatique, et toutes les fonctionnalités avancées opérationnelles
+**Version actuelle** : v1.9 - Système 100% fonctionnel avec client CLI moderne avec autocomplétion, jointures virtuelles, sous-requêtes complexes, groupement et tri, fonctions de fenêtre, système d'indexation, cache intelligent automatique, et toutes les fonctionnalités avancées opérationnelles
