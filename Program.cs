@@ -1,11 +1,90 @@
 ﻿using System.CommandLine;
 using GraphQLite.Engine;
+using GraphQLite.Scripting;
 
 namespace GraphQLite;
 
-class Program
+public class Program
 {
-    static async Task<int> Main(string[] args)
+    public static async Task Main(string[] args)
+    {
+        // Vérifier si on démarre en mode serveur web ou CLI
+        if (args.Contains("--server") || args.Contains("--api"))
+        {
+            await RunWebServer(args);
+        }
+        else
+        {
+            await RunCliApplication(args);
+        }
+    }
+
+    private static async Task RunWebServer(string[] args)
+    {
+        var builder = WebApplication.CreateBuilder(args);
+
+        // Configuration des services
+        builder.Services.AddControllers();
+        builder.Services.AddEndpointsApiExplorer();
+        builder.Services.AddSwaggerGen(c =>
+        {
+            c.SwaggerDoc("v1", new() { Title = "GraphQLite API", Version = "v1" });
+        });
+
+        // Ajouter CORS
+        builder.Services.AddCors(options =>
+        {
+            options.AddDefaultPolicy(builder =>
+            {
+                builder.AllowAnyOrigin()
+                       .AllowAnyMethod()
+                       .AllowAnyHeader();
+            });
+        });
+
+        // Enregistrer le moteur GraphQLite comme service singleton
+        var databasePath = builder.Configuration["DatabasePath"] ?? "graphqlite.gqlite";
+        builder.Services.AddSingleton<GraphQLiteEngine>(provider =>
+            new GraphQLiteEngine(databasePath));
+
+        // Enregistrer le ScriptEngine comme service
+        builder.Services.AddScoped<GraphQLite.Scripting.ScriptEngine>(provider =>
+        {
+            var engine = provider.GetRequiredService<GraphQLiteEngine>();
+            return new GraphQLite.Scripting.ScriptEngine(engine);
+        });
+
+        var app = builder.Build();
+
+        // Initialiser la base de données au démarrage
+        var engine = app.Services.GetRequiredService<GraphQLiteEngine>();
+        await engine.InitializeAsync();
+
+        // Configuration du pipeline HTTP
+        if (app.Environment.IsDevelopment())
+        {
+            app.UseSwagger();
+            app.UseSwaggerUI(c =>
+            {
+                c.SwaggerEndpoint("/swagger/v1/swagger.json", "GraphQLite API v1");
+                c.RoutePrefix = string.Empty; // Swagger UI à la racine
+            });
+        }
+
+        app.UseCors();
+        app.UseRouting();
+        app.MapControllers();
+
+        // Route de santé
+        app.MapGet("/health", () => new { status = "healthy", timestamp = DateTime.UtcNow });
+
+        Console.WriteLine("GraphQLite API démarrée sur: http://localhost:5000");
+        Console.WriteLine("Documentation Swagger disponible sur: http://localhost:5000");
+
+        await app.RunAsync();
+    }
+
+    private static async Task RunCliApplication(string[] args)
     {
         var databaseOption = new Option<string>(
             aliases: new[] { "--database", "--db", "-d" },
@@ -40,7 +119,7 @@ class Program
             await HandleCommand(database, script, interactive);
         }, databaseOption, scriptOption, interactiveOption);
 
-        return await rootCommand.InvokeAsync(args);
+        await rootCommand.InvokeAsync(args);
     }
 
     static async Task HandleCommand(string? database, string? script, bool interactive)

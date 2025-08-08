@@ -1,0 +1,399 @@
+namespace GraphQLite.Models.Api;
+
+/// <summary>
+/// Modèle de base pour toutes les réponses API
+/// </summary>
+public class ApiResponse<T>
+{
+    public bool Success { get; set; }
+    public string? Message { get; set; }
+    public T? Data { get; set; }
+    public string? Error { get; set; }
+    public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>
+/// Modèle pour créer un nœud
+/// </summary>
+public class CreateNodeRequest
+{
+    public string Label { get; set; } = string.Empty;
+    public Dictionary<string, object> Properties { get; set; } = new();
+}
+
+/// <summary>
+/// Modèle pour créer une arête
+/// </summary>
+public class CreateEdgeRequest
+{
+    public string FromNode { get; set; } = string.Empty;
+    public string ToNode { get; set; } = string.Empty;
+    public string EdgeType { get; set; } = string.Empty;
+    public Dictionary<string, object> Properties { get; set; } = new();
+}
+
+/// <summary>
+/// Modèle pour rechercher des nœuds
+/// </summary>
+public class FindNodesRequest
+{
+    public string Label { get; set; } = string.Empty;
+    public Dictionary<string, object> Conditions { get; set; } = new();
+    public int? Limit { get; set; }
+    public int? Offset { get; set; }
+}
+
+/// <summary>
+/// Modèle pour rechercher des arêtes
+/// </summary>
+public class FindEdgesRequest
+{
+    public string? FromNode { get; set; }
+    public string? ToNode { get; set; }
+    public string? EdgeType { get; set; }
+    public Dictionary<string, object> Conditions { get; set; } = new();
+    public int? Limit { get; set; }
+    public int? Offset { get; set; }
+}
+
+/// <summary>
+/// Modèle pour rechercher un chemin
+/// </summary>
+public class FindPathRequest
+{
+    public string FromNode { get; set; } = string.Empty;
+    public string ToNode { get; set; } = string.Empty;
+    public string? EdgeType { get; set; }
+    public int? MaxSteps { get; set; }
+    public bool IsBidirectional { get; set; } = false;
+    public string? AvoidEdgeType { get; set; }
+}
+
+/// <summary>
+/// Modèle pour rechercher dans les étapes
+/// </summary>
+public class FindWithinStepsRequest
+{
+    public string FromNode { get; set; } = string.Empty;
+    public string TargetLabel { get; set; } = string.Empty;
+    public int MaxSteps { get; set; } = 3;
+    public string? EdgeType { get; set; }
+    public string? AvoidEdgeType { get; set; }
+    public Dictionary<string, object> Conditions { get; set; } = new();
+}
+
+/// <summary>
+/// Modèle pour mettre à jour un nœud
+/// </summary>
+public class UpdateNodeRequest
+{
+    public string Label { get; set; } = string.Empty;
+    public Dictionary<string, object> Conditions { get; set; } = new();
+    public Dictionary<string, object> Properties { get; set; } = new();
+}
+
+/// <summary>
+/// Modèle pour mettre à jour une arête
+/// </summary>
+public class UpdateEdgeRequest
+{
+    public string? FromNode { get; set; }
+    public string? ToNode { get; set; }
+    public string? EdgeType { get; set; }
+    public Dictionary<string, object> Conditions { get; set; } = new();
+    public Dictionary<string, object> Properties { get; set; } = new();
+}
+
+/// <summary>
+/// Modèle pour supprimer des nœuds
+/// </summary>
+public class DeleteNodeRequest
+{
+    public string Label { get; set; } = string.Empty;
+    public Dictionary<string, object> Conditions { get; set; } = new();
+}
+
+/// <summary>
+/// Modèle pour supprimer des arêtes
+/// </summary>
+public class DeleteEdgeRequest
+{
+    public string? FromNode { get; set; }
+    public string? ToNode { get; set; }
+    public string? EdgeType { get; set; }
+    public Dictionary<string, object> Conditions { get; set; } = new();
+}
+
+/// <summary>
+/// Modèle pour compter les nœuds
+/// </summary>
+public class CountRequest
+{
+    public string Label { get; set; } = string.Empty;
+    public Dictionary<string, object> Conditions { get; set; } = new();
+    public int? Limit { get; set; }
+    public int? Offset { get; set; }
+    public bool CountEdges { get; set; } = false;
+}
+
+/// <summary>
+/// Modèle pour les agrégations
+/// </summary>
+public class AggregateRequest
+{
+    public string Label { get; set; } = string.Empty;
+    public string Function { get; set; } = string.Empty; // SUM, AVG, MIN, MAX, COUNT
+    public string? Property { get; set; }
+    public Dictionary<string, object> Conditions { get; set; } = new();
+}
+
+/// <summary>
+/// Modèle pour définir une variable
+/// </summary>
+public class DefineVariableRequest
+{
+    public string Name { get; set; } = string.Empty;
+    public object Value { get; set; } = new();
+}
+
+/// <summary>
+/// Modèle pour les opérations en lot
+/// </summary>
+public class BatchOperationRequest
+{
+    public string Type { get; set; } = string.Empty; // CREATE_NODES, CREATE_EDGES, etc.
+    public List<object> Operations { get; set; } = new();
+    public int? BatchSize { get; set; }
+}
+
+/// <summary>
+/// Modèle pour exécuter une requête en langage naturel
+/// </summary>
+public class NaturalLanguageQueryRequest
+{
+    public string Query { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Modèle pour les jointures virtuelles
+/// </summary>
+public class VirtualJoinRequest
+{
+    public string SourceLabel { get; set; } = string.Empty;
+    public string TargetLabel { get; set; } = string.Empty;
+    public string? EdgeType { get; set; }
+    public string? JoinProperty { get; set; }
+    public string? JoinOperator { get; set; } = "=";
+    public Dictionary<string, object> JoinConditions { get; set; } = new();
+    public int? MaxSteps { get; set; }
+    public bool IsBidirectional { get; set; } = false;
+}
+
+/// <summary>
+/// Modèle pour le groupement
+/// </summary>
+public class GroupByRequest
+{
+    public string Label { get; set; } = string.Empty;
+    public string GroupProperty { get; set; } = string.Empty;
+    public Dictionary<string, object> Conditions { get; set; } = new();
+    public string? AggregateFunction { get; set; }
+    public string? AggregateProperty { get; set; }
+}
+
+/// <summary>
+/// Modèle pour le tri
+/// </summary>
+public class OrderByRequest
+{
+    public string Label { get; set; } = string.Empty;
+    public string OrderProperty { get; set; } = string.Empty;
+    public bool Ascending { get; set; } = true;
+    public Dictionary<string, object> Conditions { get; set; } = new();
+    public int? Limit { get; set; }
+    public int? Offset { get; set; }
+}
+
+/// <summary>
+/// Modèle pour ajouter une propriété indexée
+/// </summary>
+public class AddIndexPropertyRequest
+{
+    public string Label { get; set; } = string.Empty;
+    public string Property { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Modèle pour supprimer une propriété indexée
+/// </summary>
+public class RemoveIndexPropertyRequest
+{
+    public string Label { get; set; } = string.Empty;
+    public string Property { get; set; } = string.Empty;
+}
+
+#region Additional CRUD Models
+
+/// <summary>
+/// Modèle de réponse unifié pour toutes les opérations CRUD
+/// </summary>
+public class CrudResponse<T>
+{
+    public bool Success { get; set; }
+    public string? Message { get; set; }
+    public string? Error { get; set; }
+    public T? Data { get; set; }
+    public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>
+/// Modèle de statut de santé
+/// </summary>
+public class HealthStatus
+{
+    public bool IsHealthy { get; set; }
+    public string GraphQLiteEngine { get; set; } = string.Empty;
+    public string ScriptEngine { get; set; } = string.Empty;
+    public DateTime Timestamp { get; set; }
+}
+
+/// <summary>
+/// Modèle pour la création batch de nœuds
+/// </summary>
+public class CreateNodesBatchRequest
+{
+    public required List<CreateNodeRequest> Nodes { get; set; }
+    public bool Atomic { get; set; } = false;
+}
+
+/// <summary>
+/// Modèle pour la mise à jour de nœuds
+/// </summary>
+public class UpdateNodesRequest
+{
+    public required string Label { get; set; }
+    public required Dictionary<string, object> Properties { get; set; }
+    public Dictionary<string, object>? Conditions { get; set; }
+}
+
+/// <summary>
+/// Modèle pour la mise à jour d'arêtes
+/// </summary>
+public class UpdateEdgesRequest
+{
+    public required string FromNode { get; set; }
+    public required string ToNode { get; set; }
+    public required Dictionary<string, object> Properties { get; set; }
+    public Dictionary<string, object>? Conditions { get; set; }
+}
+
+/// <summary>
+/// Modèle pour la suppression de nœuds
+/// </summary>
+public class DeleteNodesRequest
+{
+    public required string Label { get; set; }
+    public Dictionary<string, object>? Conditions { get; set; }
+    public bool Force { get; set; } = false;
+}
+
+/// <summary>
+/// Modèle pour la suppression d'arêtes
+/// </summary>
+public class DeleteEdgesRequest
+{
+    public required string FromNode { get; set; }
+    public required string ToNode { get; set; }
+    public Dictionary<string, object>? Conditions { get; set; }
+}
+
+/// <summary>
+/// Modèle pour la recherche de chemins
+/// </summary>
+public class FindPathRequest
+{
+    public required string FromNode { get; set; }
+    public required string ToNode { get; set; }
+    public int? MaxSteps { get; set; }
+    public string Algorithm { get; set; } = "dijkstra";
+    public string? WeightProperty { get; set; }
+}
+
+/// <summary>
+/// Modèle pour l'optimisation du graphe
+/// </summary>
+public class OptimizeGraphRequest
+{
+    public string Algorithm { get; set; } = "intelligent_optimization";
+    public Dictionary<string, object> Parameters { get; set; } = new();
+}
+
+/// <summary>
+/// Modèle pour les agrégations avancées
+/// </summary>
+public class AggregationRequest
+{
+    public required string Label { get; set; }
+    public required string Function { get; set; } // count, sum, avg, min, max
+    public required string Property { get; set; }
+    public Dictionary<string, object>? Conditions { get; set; }
+}
+
+/// <summary>
+/// Modèle pour l'exécution de scripts
+/// </summary>
+public class ExecuteScriptRequest
+{
+    public required string ScriptPath { get; set; }
+    public Dictionary<string, string>? Variables { get; set; }
+}
+
+/// <summary>
+/// Modèle pour l'exécution de contenu de script
+/// </summary>
+public class ExecuteScriptContentRequest
+{
+    public required string Content { get; set; }
+    public Dictionary<string, string>? Variables { get; set; }
+}
+
+/// <summary>
+/// Résultat d'exécution de script
+/// </summary>
+public class ScriptExecutionResult
+{
+    public bool Success { get; set; }
+    public int TotalQueries { get; set; }
+    public int SuccessfulQueries { get; set; }
+    public int FailedQueries { get; set; }
+    public TimeSpan ExecutionTime { get; set; }
+    public List<QueryExecutionSummary> Results { get; set; } = new();
+    public string? Error { get; set; }
+}
+
+/// <summary>
+/// Résumé d'exécution de requête
+/// </summary>
+public class QueryExecutionSummary
+{
+    public required string Query { get; set; }
+    public bool Success { get; set; }
+    public string? Message { get; set; }
+    public string? Error { get; set; }
+    public TimeSpan ExecutionTime { get; set; }
+}
+
+/// <summary>
+/// Résultat d'opération batch
+/// </summary>
+public class BatchResult
+{
+    public int TotalOperations { get; set; }
+    public int SuccessfulOperations { get; set; }
+    public int FailedOperations { get; set; }
+    public TimeSpan ExecutionTime { get; set; }
+    public string? Details { get; set; }
+    public List<string> Errors { get; set; } = new();
+}
+
+#endregion

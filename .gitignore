@@ -4,3 +4,4 @@ bin
 *.gqls 
 config 
 .DS_Store
+.vscode

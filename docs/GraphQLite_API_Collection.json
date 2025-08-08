@@ -1,0 +1,281 @@
+{
+  "info": {
+    "name": "GraphQLite API",
+    "description": "Collection de requêtes pour tester l'API REST GraphQLite",
+    "version": "1.0.0"
+  },
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:5000/health",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "5000",
+          "path": ["health"]
+        }
+      }
+    },
+    {
+      "name": "Create Node - Person",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"label\": \"person\",\n    \"properties\": {\n        \"name\": \"Alice\",\n        \"age\": 30,\n        \"city\": \"Paris\",\n        \"email\": \"alice@example.com\"\n    }\n}"
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/nodes",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "5000",
+          "path": ["api", "nodes"]
+        }
+      }
+    },
+    {
+      "name": "Create Node - Company",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"label\": \"company\",\n    \"properties\": {\n        \"name\": \"TechCorp\",\n        \"sector\": \"Technology\",\n        \"employees\": 500,\n        \"city\": \"Paris\"\n    }\n}"
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/nodes",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "5000",
+          "path": ["api", "nodes"]
+        }
+      }
+    },
+    {
+      "name": "Create Edge - Works At",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"fromNode\": \"Alice\",\n    \"toNode\": \"TechCorp\",\n    \"edgeType\": \"works_at\",\n    \"properties\": {\n        \"position\": \"Software Engineer\",\n        \"since\": \"2020\",\n        \"salary\": 75000\n    }\n}"
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/edges",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "5000",
+          "path": ["api", "edges"]
+        }
+      }
+    },
+    {
+      "name": "Search Nodes - Persons",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"label\": \"person\",\n    \"conditions\": {\n        \"city\": \"Paris\"\n    },\n    \"limit\": 10\n}"
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/nodes/search",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "5000",
+          "path": ["api", "nodes", "search"]
+        }
+      }
+    },
+    {
+      "name": "Find Path",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"fromNode\": \"Alice\",\n    \"toNode\": \"TechCorp\",\n    \"maxSteps\": 5,\n    \"isBidirectional\": true\n}"
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/paths/find",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "5000",
+          "path": ["api", "paths", "find"]
+        }
+      }
+    },
+    {
+      "name": "Execute Natural Language Query",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"query\": \"find person where city: \\\"Paris\\\" and age > 25\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/query/execute",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "5000",
+          "path": ["api", "query", "execute"]
+        }
+      }
+    },
+    {
+      "name": "Define Variable",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"name\": \"target_city\",\n    \"value\": \"Paris\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/query/variables",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "5000",
+          "path": ["api", "query", "variables"]
+        }
+      }
+    },
+    {
+      "name": "Get Schema",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:5000/api/schema",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "5000",
+          "path": ["api", "schema"]
+        }
+      }
+    },
+    {
+      "name": "Get Statistics",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:5000/api/schema/stats",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "5000",
+          "path": ["api", "schema", "stats"]
+        }
+      }
+    },
+    {
+      "name": "Virtual Join",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"sourceLabel\": \"person\",\n    \"targetLabel\": \"company\",\n    \"edgeType\": \"works_at\",\n    \"maxSteps\": 2,\n    \"isBidirectional\": false\n}"
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/advanced/virtual-join",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "5000",
+          "path": ["api", "advanced", "virtual-join"]
+        }
+      }
+    },
+    {
+      "name": "Count Nodes",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"label\": \"person\",\n    \"conditions\": {}\n}"
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/nodes/person/count",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "5000",
+          "path": ["api", "nodes", "person", "count"]
+        }
+      }
+    },
+    {
+      "name": "Aggregate - Average Age",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"label\": \"person\",\n    \"function\": \"AVG\",\n    \"property\": \"age\",\n    \"conditions\": {}\n}"
+        },
+        "url": {
+          "raw": "http://localhost:5000/api/nodes/person/aggregate",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "5000",
+          "path": ["api", "nodes", "person", "aggregate"]
+        }
+      }
+    }
+  ]
+}
